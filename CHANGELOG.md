@@ -1,0 +1,191 @@
+# Changelog
+
+All notable changes to this project are documented here. The format follows
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
+[Semantic Versioning](https://semver.org/).
+
+## [Unreleased]
+
+### Added — Milestone 4 (Deterministic evaluators and tool-calling)
+- Evaluator framework (`app/evaluators/`): every evaluator has a name, a version, a suite, a
+  kind, and the case types it applies to, and it returns a status (`completed`, `failed`,
+  `skipped`, `not_applicable`, `requires_review`), a nullable score, pass/fail, a label, a
+  rationale, and evidence. The registry is listed at `GET /api/v1/evaluators`. Each run snapshot
+  records the evaluators with their versions, the evaluation framework version, and the
+  quality metrics version.
+- Answer quality: exact match, normalized match (Unicode NFKC, case, punctuation, English
+  articles, whitespace), contains-reference (whole words), token F1 with a configurable pass
+  threshold, a refusal-behaviour heuristic for safety cases, and optional embedding similarity
+  through an `/embeddings` endpoint (reported as similarity, not correctness). Acceptable
+  alternative answers come from `metadata.acceptable_answers`.
+- Structured output: JSON validity (raw, or inside a code fence when allowed; labeled
+  separately), JSON Schema conformance (Draft 2020-12) with the violating paths, and
+  expected-JSON field match (fraction of expected leaf fields).
+- Tool calling: tool selection (correct, missing call, unnecessary call, wrong tools),
+  argument names, argument schema validity, required arguments, argument values, call order,
+  invented tools, final answer, and end-to-end task success. Run metrics:
+  `tool.selection_accuracy`, argument accuracies, call precision and recall, and missing,
+  unnecessary, invented-tool, and malformed-argument rates. Argument metrics count only cases
+  where the expected tool was selected, so selection and argument errors stay separate.
+- Simulated tool execution (`tool_mode: simulated`, the default): valid calls are answered with
+  the dataset's fixture results (or a structured error), and the model is asked to continue,
+  for up to `max_tool_rounds` rounds. **Nothing is executed.** `generation_only` inspects the
+  calls without follow-up requests. Real tool execution ("integration" mode) is rejected. Follow-up
+  requests are not part of the performance metrics.
+- Evaluation runs in the worker on final, successful, measured attempts, using the full
+  response. Results are stored in `evaluation_results` (migration `0005`) in the same
+  transaction as the attempt. Failed requests are not evaluated; `quality.evaluated_requests`
+  reports how many were. Quality rates count only completed evaluations; a rate with no
+  applicable case is null with a reason, never 0. `quality.output_consistency` reports
+  identical answers on repeated cases.
+- Evaluation profiles (`evaluation_profiles`, migration `0005`): `/api/v1/profiles` CRUD. A run
+  can start from a profile (`profile_id`); fields set in the request win, and the run snapshot
+  copies the settings, so editing a profile never changes past runs.
+- Runs validate that the selected datasets contain case types for each quality suite (422
+  otherwise).
+- Results API: `evaluator` and `evaluation` (`passed` / `failed`) filters, evaluation
+  summaries on each result, and full evaluations on the result detail.
+- UI: quality settings in the New Evaluation wizard (tool mode, F1 threshold, embedding
+  endpoint, code-fence switch), "Start from a profile" and "Save as profile"; an Evaluation
+  Profiles page; Quality and Tool-call metrics cards, a Quality failures tab, a Checks column,
+  and per-request evaluations and the simulated tool transcript on the run page.
+- CLI: `profile:` and `evaluation:` keys in run configs (endpoint names for
+  `evaluation.embedding.endpoint`), and a quality section in `run results`.
+- Mock model server: scripted responses (`MOCK_SCRIPT`), multiple tool calls, answers after tool
+  results, and deterministic `/v1/embeddings`.
+- Smoke test: the mock run also evaluates answer quality.
+
+### Added — Milestone 3 (Run engine and performance metrics)
+- Benchmark runs (migration `0004`): `benchmark_runs`, `run_datasets`, `run_models`,
+  `run_case_results`, and `run_aggregate_metrics`. Each run stores an immutable, secret-free
+  configuration snapshot: the effective request settings per endpoint (secret references only),
+  generation and sampling mode, the resolved load plan, dataset versions with content hashes,
+  and the framework, metrics, and prompt-builder versions.
+- Run state machine: created, queued, initializing, running, finalizing, then completed,
+  completed_with_errors, cancelled, or failed. A run is completed_with_errors when at least one
+  measured request failed after its retries, or never ran.
+- Worker queue backed by the database. A worker claims a run with an atomic conditional update
+  and holds a renewable lease. Redis is only a wake-up signal. If a worker stops, it hands the
+  run back to the queue; if it dies, another worker resumes the run once the lease expires.
+  Resumed runs skip requests that already have a final result, so nothing is duplicated.
+- Load profiles: smoke (at most 5 requests at concurrency up to 2), sequential, fixed
+  concurrency, ramp (increasing concurrency steps, metrics per step), and sustained (hold N
+  requests in flight for a duration, with an optional request cap). Endpoints run one after
+  another, so models don't compete for the same server.
+- Warm-up requests run sequentially before the measured phase, are never retried, are stored
+  with `phase = warmup`, and are excluded from every aggregate.
+- Streaming and non-streaming execution through the adapter layer. Per-request timeouts, retries
+  with exponential backoff (each attempt is its own stored row), and cancellation, which stops
+  in-flight requests.
+- Every attempt is stored: status, error type, HTTP status, latency, TTFT, token counts with
+  their source, chunk timing, response text (`RUN_STORE_RESPONSES`, capped by
+  `RUN_RESPONSE_MAX_CHARS`), and the request settings.
+- Performance metrics (metrics version 1) computed from per-request observations: request
+  counts, retries, error and timeout rates, errors by type, latency / TTFT / generation time /
+  inter-token latency distributions (mean, stddev, min, p50, p90, p95, p99, max; linear
+  interpolation), per-request output tokens per second, token totals, measurement window,
+  request throughput, and output and total token throughput. A metric that can't be measured is
+  stored as null with a reason, never as 0 (for example, TTFT without streaming, or token
+  throughput when the server did not report token counts).
+- API: `/api/v1/runs` list, summary, create, detail, delete, `cancel`, `retry-failed`, `results`
+  (filter by model, status, phase, search), `results/{id}`, `metrics` (live while running), and
+  `events`, a Server-Sent Events stream with progress, per-request, and lifecycle events that
+  supports `Last-Event-ID`.
+- Datasets and projects used by an active run can't be deleted (409).
+- CLI: `openllm-eval run create --config bench.yaml [--wait]`, plus `run status [--watch]`,
+  `run results`, `run list`, and `run cancel`.
+- UI:
+  - The New Evaluation wizard has performance settings: profile, requests, concurrency,
+    warm-up, streaming, max tokens, temperature, timeout, retries, ramp steps, and duration.
+    They are validated as you type. Start Evaluation creates the run and opens it.
+  - New Benchmark Runs list.
+  - New run page with live progress over SSE, per-model progress, a live request feed, a
+    metrics table with reasons for unavailable values, per-step ramp tables, a results browser
+    (all, failures, warm-up) with a detail drawer, and the configuration and methodology used.
+  - The Dashboard shows recent evaluations.
+- Mock model server: `X-Mock-Fail-If-Contains`, `X-Mock-Fail-First`, and `X-Mock-Fail-Status`
+  headers to simulate failures.
+- Smoke test: with the mock profile, runs a real benchmark (1 warm-up and 8 measured requests)
+  through the worker and checks the metrics.
+
+### Added — Milestone 2 (Datasets)
+- Versioned datasets (migration `0003`): `datasets`, `dataset_versions`, and `dataset_cases`
+  tables. Versions and cases are immutable (the ORM refuses updates). Each version records a
+  SHA-256 `content_hash` of its normalized JSONL export, plus record, type, tag, and split counts.
+- Dataset schema version 1 with eight case types: chat, instruction, qa, structured_output
+  (the JSON Schema is checked, and so is the expected output), tool_call (expected calls are
+  checked against the tool definitions), rag (citations must reference supplied documents),
+  long_context, and safety. Unknown fields are kept and produce a warning.
+- JSONL and CSV import with line-numbered errors and warnings. CSV supports JSON-valued columns
+  and `metadata.x` columns. Limits on file size, record count, and record size; UTF-8 only.
+- The content hash is reproducible across CSV and JSONL input, key order, and whitespace. Run
+  `sha256sum` on an export and you get the stored hash.
+- API: `/api/v1/datasets` CRUD, `validate` (dry run), `versions` (upload a new version, list,
+  switch current), `preview` (filters for tag, type, and case id), `cases/{id}`, `export` (streamed
+  JSONL with an `X-Content-SHA256` header), `duplicate`, `case-types`, and `samples` with install.
+  Uploads accept JSON bodies or `multipart/form-data`.
+- Five bundled sample datasets (original synthetic content, CC0-1.0): general QA, tool calling,
+  RAG grounding, structured output, and long-context needle retrieval. They are installed on
+  request, not automatically.
+- CLI: `openllm-eval dataset validate PATH` (offline), `dataset list`, and `dataset import PATH`.
+- Web UI: a **Datasets** page (my datasets, built-in samples, import with a validation report),
+  a dataset detail page (records browser, versions with export and switch, details), and the
+  **New Evaluation** wizard: Basic setup → Evaluation types → Datasets → Review. The draft
+  persists in the browser between steps. "Start evaluation" stays disabled until Milestone 3.
+- Projects show a dataset count. Deleting a project deletes its datasets.
+- `DATASET_MAX_UPLOAD_BYTES`, `DATASET_MAX_RECORDS`, and `DATASET_MAX_RECORD_BYTES` settings.
+- The smoke test imports a dataset, exports it, and verifies the hash.
+- `scripts/deploy.sh` (`make deploy`) installs or upgrades the stack. It stops containers from
+  older installs, including ones that ran under a different Compose project name, carries the
+  database over (backing up any database it replaces), checks the ports, starts the new version,
+  and runs the smoke test.
+
+### Added — Milestone 1 (Endpoint management and the OpenAI-compatible adapter)
+- `model_endpoints` table (migration `0002`): endpoints can be global or scoped to a project.
+  Each records its request configuration, declared deployment metadata, tags, enabled flag, and
+  the result of its last connection test.
+- Model adapter interface (`ModelAdapter`), an adapter registry, and an `openai_compatible`
+  adapter for vLLM, llama.cpp server, Ollama `/v1`, and hosted APIs. It supports streaming and
+  non-streaming chat completions, SSE parsing, tool-call assembly, server-reported token usage,
+  and a `/models` check.
+- Timing: latency, time to first token (streaming only; the first event carrying content,
+  reasoning, or tool-call data), generation time, and per-event offsets. Unknown values are
+  `null`, never `0`.
+- Secret references (`env:OPENLLM_SECRET_*`). Keys live in `secrets.env` and are never stored,
+  returned, logged, or included in error messages.
+- Outbound network policy (SSRF protection): http/https only, no credentials in URLs, no
+  redirects, internal service names and cloud-metadata addresses always blocked, and private
+  networks blocked unless allowed. DNS is rechecked before every request. Responses are size- and
+  time-bounded.
+- API: `GET /api/v1/adapters`; `/api/v1/projects` CRUD with archive and restore;
+  `/api/v1/endpoints` CRUD with `clone`, `test`, and `metadata`.
+- CLI: `openllm-eval endpoint list` and `openllm-eval endpoint test NAME_OR_ID`.
+- Mock OpenAI-compatible server (`python -m app.testing.mock_openai`, Compose profile `mock`) for
+  demos, contract tests, and the smoke test.
+- Web UI redesign: a sidebar navigation grouped by section, a dashboard with real
+  endpoint and health data, a **Models / Endpoints** page (filter, search, add or edit form,
+  connection test with metrics, clone, enable or disable, delete), and a **Projects** page. The
+  Inter font and the icons are bundled; the UI makes no remote requests.
+
+### Fixed
+- The database connection failed when `POSTGRES_PASSWORD` contained URL-special characters such
+  as `@`. Compose now passes discrete `POSTGRES_*` settings, and the backend builds an escaped URL.
+  `.env.example` documents single-quoting passwords that contain `$`.
+- `scripts/smoke-test.sh` reads `API_PORT` / `FRONTEND_PORT` from `.env`.
+
+### Added — Milestone 0 (Foundation)
+- Repository skeleton and Apache-2.0 license.
+- FastAPI backend with environment-based configuration (pydantic-settings).
+- Structured JSON logging (structlog) with secret redaction and per-request IDs (`X-Request-ID`).
+- Consistent API error envelope.
+- `GET /api/v1/health`, `GET /api/v1/health/ready`, and `GET /api/v1/version`. The OpenAPI schema
+  is served at `/api/openapi.json`.
+- SQLAlchemy 2 async data layer and Alembic migrations (`0001`: `projects` table).
+- Worker process with a Redis heartbeat (`python -m app.execution.worker`).
+- `openllm-eval` CLI with `version` and `health` commands.
+- React + TypeScript web UI: application shell with the main navigation and a dashboard
+  showing system health.
+- Docker Compose stack (frontend, api, worker, migrate, postgres, redis) and a dev override
+  with hot reload.
+- GitHub Actions CI: backend tests on PostgreSQL/Redis and SQLite, frontend tests and build,
+  and an end-to-end Compose smoke test.

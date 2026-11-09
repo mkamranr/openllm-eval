@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-labelledby="t">
+  <title id="t">OpenLLM-Eval</title>
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#5b5cf6"/>
+      <stop offset="0.55" stop-color="#7c4dff"/>
+      <stop offset="1" stop-color="#9b4dff"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="15" fill="url(#g)"/>
+  <!-- gauge track and reading -->
+  <path d="M13 41 A19 19 0 1 1 51 41" fill="none" stroke="#fff" stroke-opacity="0.32" stroke-width="5" stroke-linecap="round"/>
+  <path d="M13 41 A19 19 0 0 1 48.5 31.5" fill="none" stroke="#fff" stroke-width="5" stroke-linecap="round"/>
+  <!-- pass check -->
+  <path d="M23.5 40.5 L30 47 L42 34" fill="none" stroke="#fff" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

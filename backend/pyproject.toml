@@ -1,0 +1,66 @@
+[project]
+name = "openllm-eval"
+version = "0.0.1"
+description = "Self-hosted framework for benchmarking and evaluating LLMs across local and hosted inference endpoints."
+readme = "README.md"
+license = { text = "Apache-2.0" }
+requires-python = ">=3.12,<3.14"
+dependencies = [
+    "fastapi>=0.115,<0.116",
+    "uvicorn[standard]>=0.32,<0.33",
+    "pydantic>=2.9,<3",
+    "pydantic-settings>=2.6,<3",
+    "sqlalchemy[asyncio]>=2.0.36,<2.1",
+    "alembic>=1.14,<1.15",
+    "psycopg[binary]>=3.2,<3.3",
+    "aiosqlite>=0.20,<0.21",
+    "redis>=5.2,<5.3",
+    "structlog>=24.4,<25",
+    "httpx>=0.27,<0.28",
+    "typer>=0.13,<0.14",
+    "click>=8.1.7,<8.2",  # typer 0.13 predates click 8.2 API changes
+    "python-multipart>=0.0.18,<0.1",
+    "jsonschema>=4.23,<5",
+    "pyyaml>=6.0.2,<7",
+]
+
+[project.scripts]
+openllm-eval = "app.cli.main:app"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3,<9",
+    "pytest-asyncio>=0.24,<0.25",
+    "fakeredis>=2.26,<3",
+    "ruff>=0.8,<0.9",
+]
+
+[build-system]
+requires = ["hatchling>=1.25,<2"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+filterwarnings = [
+    "error::DeprecationWarning:app.*",
+    # uvicorn imports the legacy websockets API even with ws="none" (third-party, harmless).
+    "ignore::DeprecationWarning:websockets.*",
+    "ignore::DeprecationWarning:uvicorn.protocols.websockets.*",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["app/db/migrations/versions"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "S", "ASYNC", "RUF"]
+ignore = ["B008"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S105", "S106"]

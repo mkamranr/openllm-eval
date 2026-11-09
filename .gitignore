@@ -1,0 +1,39 @@
+# Secrets / local config
+.env
+.env.*
+!.env.example
+secrets.env
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+*.egg-info/
+*.db
+*.db-journal
+
+# Node
+node_modules/
+frontend/dist/
+coverage/
+*.tsbuildinfo
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Generated artifacts
+/reports-output/
+/offline-bundle/
+
+# Original planning inputs (kept out of the repository)
+/OpenLLM-Eval-Implementation-Plan.md
+/OpenLLM-Eval*Dashboard*.png
+/*.tar.gz

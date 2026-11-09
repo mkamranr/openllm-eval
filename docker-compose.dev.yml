@@ -1,0 +1,42 @@
+# Development overrides: hot reload for the API and Vite dev server for the UI.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
+#
+# UI: http://localhost:5173  (proxies /api to the api service)
+# API: http://localhost:8000
+
+services:
+  api:
+    environment:
+      ENVIRONMENT: development
+      LOG_FORMAT: console
+      LOG_LEVEL: DEBUG
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload", "--reload-dir", "/app/app"]
+    volumes:
+      - ./backend/app:/app/app:ro
+
+  worker:
+    environment:
+      ENVIRONMENT: development
+      LOG_FORMAT: console
+      LOG_LEVEL: DEBUG
+    volumes:
+      - ./backend/app:/app/app:ro
+
+  frontend:
+    image: node:20.18.1-alpine3.20
+    build: !reset null
+    working_dir: /src
+    command: ["sh", "-c", "npm ci --no-audit --no-fund && npm run dev -- --host 0.0.0.0"]
+    environment:
+      VITE_API_PROXY_TARGET: http://api:8000
+    ports: !override
+      - "${BIND_ADDRESS:-127.0.0.1}:5173:5173"
+    volumes:
+      - ./frontend:/src
+      - frontend_node_modules:/src/node_modules
+    healthcheck:
+      disable: true
+
+volumes:
+  frontend_node_modules:

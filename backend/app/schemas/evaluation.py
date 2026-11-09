@@ -1,0 +1,84 @@
+"""Evaluation configuration, profiles, and evaluator results (spec §5.6, §5.7, §9.4)."""
+
+from __future__ import annotations
+
+import uuid
+from datetime import datetime
+from typing import Any
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+
+class EmbeddingConfig(BaseModel):
+    """Optional embedding-similarity evaluator. The endpoint must serve ``/embeddings``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    endpoint_id: uuid.UUID
+    threshold: float = Field(default=0.8, ge=-1, le=1)
+
+
+class EvaluationConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    # Spec §5.7: mode A = generation_only, mode B = simulated. Mode C (real tool execution) is
+    # deliberately not offered.
+    tool_mode: str = "simulated"
+    max_tool_rounds: int = Field(default=3, ge=1, le=5)
+    token_f1_threshold: float = Field(default=0.5, ge=0, le=1)
+    allow_code_fence: bool = True
+    disabled_evaluators: list[str] = Field(default_factory=list, max_length=50)
+    embedding: EmbeddingConfig | None = None
+
+    @field_validator("tool_mode")
+    @classmethod
+    def _tool_mode(cls, v: str) -> str:
+        if v in ("integration", "controlled_integration", "execute"):
+            raise ValueError(
+                "Real tool execution (spec §5.7 mode C) is disabled in this release; use "
+                "'simulated' (fixture results) or 'generation_only'."
+            )
+        if v not in ("simulated", "generation_only"):
+            raise ValueError("tool_mode must be 'simulated' or 'generation_only'.")
+        return v
+
+    @field_validator("disabled_evaluators")
+    @classmethod
+    def _known(cls, v: list[str]) -> list[str]:
+        from app.evaluators.registry import get_evaluator
+
+        unknown = [n for n in v if get_evaluator(n) is None]
+        if unknown:
+            raise ValueError(f"Unknown evaluator(s): {', '.join(unknown)}.")
+        return list(dict.fromkeys(v))
+
+
+class EvaluatorInfo(BaseModel):
+    name: str
+    version: str
+    suite: str
+    kind: str
+    title: str
+    description: str
+    case_types: list[str]
+    optional: bool
+
+
+class EvaluationSummary(BaseModel):
+    """Compact evaluator verdict, embedded in result listings."""
+
+    evaluator_name: str
+    suite: str
+    status: str
+    score: float | None
+    passed: bool | None
+    label: str | None
+
+
+class EvaluationResultRead(EvaluationSummary):
+    id: uuid.UUID
+    evaluator_version: str
+    rationale: str | None
+    evidence: list[dict[str, Any]]
+    metadata: dict[str, Any]
+    created_at: datetime

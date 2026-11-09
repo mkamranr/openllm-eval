@@ -1,0 +1,161 @@
+# OpenLLM-Eval — Docker Compose deployment.
+#
+#   cp .env.example .env   # then set POSTGRES_PASSWORD
+#   bash scripts/deploy.sh # = docker compose up -d --build + upgrade handling + smoke test
+#
+# Model servers (vLLM, Ollama, ...) are NOT part of this project; point endpoints at them by URL.
+# For a development setup with hot reload, add -f docker-compose.dev.yml.
+
+# Fixed project name: unpacking a new release into a differently named folder upgrades the same
+# stack (same containers and volumes) instead of starting a second copy that fights over ports.
+name: openllm-eval
+
+x-backend-env: &backend-env
+  ENVIRONMENT: ${ENVIRONMENT:-production}
+  # Discrete settings (not a hand-built URL): the backend escapes them, so the password may
+  # contain any characters.
+  POSTGRES_HOST: postgres
+  POSTGRES_PORT: "5432"
+  POSTGRES_USER: ${POSTGRES_USER:-openllm}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+  POSTGRES_DB: ${POSTGRES_DB:-openllm_eval}
+  REDIS_URL: redis://redis:6379/0
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  LOG_FORMAT: ${LOG_FORMAT:-json}
+  # Model endpoint network policy (see .env.example and SECURITY.md).
+  ENDPOINT_ALLOW_PRIVATE_NETWORKS: ${ENDPOINT_ALLOW_PRIVATE_NETWORKS:-false}
+  ENDPOINT_ALLOWED_HOSTS: ${ENDPOINT_ALLOWED_HOSTS:-}
+  ENDPOINT_BLOCKED_HOSTS: ${ENDPOINT_BLOCKED_HOSTS:-postgres,redis}
+  ENDPOINT_MAX_RESPONSE_BYTES: ${ENDPOINT_MAX_RESPONSE_BYTES:-16777216}
+  # Empty = custom CA paths disabled. To enable, set e.g. /certs and mount your CAs there.
+  CA_CERT_DIR: ${CA_CERT_DIR:-}
+  # Dataset limits (spec §12.4). nginx accepts request bodies up to 50 MB.
+  DATASET_MAX_UPLOAD_BYTES: ${DATASET_MAX_UPLOAD_BYTES:-26214400}
+  DATASET_MAX_RECORDS: ${DATASET_MAX_RECORDS:-20000}
+  DATASET_MAX_RECORD_BYTES: ${DATASET_MAX_RECORD_BYTES:-4194304}
+  # Benchmark runs (spec §5.4, §8.2).
+  RUN_MAX_REQUESTS: ${RUN_MAX_REQUESTS:-100000}
+  RUN_MAX_CONCURRENCY: ${RUN_MAX_CONCURRENCY:-256}
+  RUN_STORE_RESPONSES: ${RUN_STORE_RESPONSES:-true}
+  RUN_RESPONSE_MAX_CHARS: ${RUN_RESPONSE_MAX_CHARS:-20000}
+
+x-backend: &backend
+  build:
+    context: ./backend
+  image: openllm-eval-backend:${OPENLLM_VERSION:-0.0.1}
+  restart: unless-stopped
+  environment: *backend-env
+  # Model API keys: OPENLLM_SECRET_* variables, referenced by endpoints as "env:NAME".
+  # Optional file (Compose >= 2.24); see secrets.env.example.
+  env_file:
+    - path: ./secrets.env
+      required: false
+  networks: [internal]
+  security_opt: ["no-new-privileges:true"]
+
+services:
+  postgres:
+    image: postgres:16.6-bookworm
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-openllm_eval}
+      POSTGRES_USER: ${POSTGRES_USER:-openllm}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks: [internal]
+
+  redis:
+    image: redis:7.4.1-bookworm
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks: [internal]
+
+  migrate:
+    <<: *backend
+    restart: "no"
+    command: ["alembic", "upgrade", "head"]
+    healthcheck:
+      disable: true
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    <<: *backend
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${API_PORT:-8000}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    # Model endpoints are usually on other hosts, so the API/worker need outbound access.
+    networks: [internal, egress]
+
+  worker:
+    <<: *backend
+    command: ["python", "-m", "app.execution.worker"]
+    # On stop/upgrade the worker hands its current run back to the queue (results so far are
+    # kept, the next worker resumes it); give it time to do that before SIGKILL.
+    stop_grace_period: 30s
+    healthcheck:
+      disable: true
+    depends_on:
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    networks: [internal, egress]
+
+  frontend:
+    build:
+      context: ./frontend
+    image: openllm-eval-frontend:${OPENLLM_VERSION:-0.0.1}
+    restart: unless-stopped
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${FRONTEND_PORT:-3000}:8080"
+    depends_on:
+      api:
+        condition: service_healthy
+    networks: [internal, egress]
+    security_opt: ["no-new-privileges:true"]
+
+  # Optional mock OpenAI-compatible model server for demos and smoke tests:
+  #   docker compose --profile mock up -d
+  # Register it as http://mock-llm:9000/v1 with model "mock-model" (allow the host with
+  # ENDPOINT_ALLOWED_HOSTS=mock-llm or ENDPOINT_ALLOW_PRIVATE_NETWORKS=true).
+  mock-llm:
+    <<: *backend
+    profiles: [mock]
+    command: ["python", "-m", "app.testing.mock_openai", "--host", "0.0.0.0", "--port", "9000"]
+    environment:
+      MOCK_MODELS: mock-model,mock-model-q4
+    env_file: !reset []
+    healthcheck:
+      disable: true
+    networks: [egress]
+
+networks:
+  # Postgres and Redis live only on this network: no host ports and no outbound access.
+  internal:
+    internal: true
+  egress: {}
+
+volumes:
+  postgres_data:
+  redis_data:
