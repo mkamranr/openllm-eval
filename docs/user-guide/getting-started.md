@@ -87,6 +87,8 @@ Each quality suite reads the case types it understands; other cases are skipped.
 | Answer quality | qa, chat, instruction, long_context, safety | exact match, normalized match, contains reference, token F1, refusal behaviour (safety), embedding similarity (optional) |
 | Structured output | structured_output | valid JSON, JSON Schema conformance, expected fields |
 | Tool-calling | tool_call | tool selection, argument names, schema, required arguments and values, call order, invented tools, final answer, task success |
+| RAG evaluation | rag | faithfulness, answer correctness, answer relevance (judge), context relevance, precision, and recall, citation precision and recall, abstention |
+| Hallucination check | rag, long_context | each claim classified as supported, unsupported, contradicted, or unverifiable |
 
 Settings:
 
@@ -102,6 +104,19 @@ Settings:
 - **Accept JSON inside a code fence**: fenced JSON counts as valid, but it is labeled
   separately.
 
+For RAG and hallucination checks:
+
+- **Without a judge** (the default), claims are checked lexically: a claim is supported when
+  enough of its words appear in one passage (or two), and contradicted when it states a number
+  that the closest evidence contradicts and no passage mentions. Paraphrases often come out as
+  *unverifiable* and are flagged for review. Answer relevance needs a judge and is skipped.
+- **LLM judge (optional)**: pick any registered endpoint. It extracts and verifies claims and
+  rates relevance. Questions, contexts, and answers are sent to it. Judging runs after each
+  model has been measured, so it never slows the measured requests; the run page shows
+  "Judging n/N". A judge can be wrong: every verdict keeps its rationale and quoted evidence,
+  and a quote that is not in the passage is flagged.
+- **Faithfulness pass threshold** (default 0.8). A contradicted claim always fails the case.
+
 A run is rejected if none of its datasets contains a case type for a selected quality suite.
 
 ## 6. Read the results
@@ -115,9 +130,14 @@ The run page updates live while the run executes.
 - **Tool-call metrics**: selection accuracy, argument accuracies, precision and recall, and
   error rates. Argument metrics count only cases where the right tool was chosen, so a wrong
   tool is not also counted as an argument error.
+- **Evidence and claims** (RAG and hallucination runs): claim-level rates pooled over all
+  answers, with supported, unsupported, contradicted, and unverifiable claims kept apart, and
+  abstention precision and recall. The card says whether a judge was used, and warns when the
+  judge is also a model under test.
 - **Results**: every attempt, with tabs for failures, quality failures, and warm-up. Click a
   case to see the request, the response, each evaluator's verdict with its reason and evidence,
-  and the simulated tool transcript.
+  each claim with its verdict, evidence excerpt, and source, and the simulated tool
+  transcript.
 - **Configuration**: the immutable snapshot of what ran, including endpoint settings (secret
   references only), dataset versions and hashes, evaluator versions, and the profile.
 
@@ -128,6 +148,8 @@ How to interpret the numbers:
   rate with no applicable cases.
 - Warm-up requests are never included in any metric.
 - Failed requests are not evaluated for quality. `evaluated requests` shows how many were.
+- Faithfulness compares claims with the supplied contexts only. A supported claim is not proven
+  true, and the contexts themselves may be wrong.
 - After **Retry failed**, throughput becomes unavailable, because the measurement is no longer
   one contiguous window.
 

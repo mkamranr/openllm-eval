@@ -380,7 +380,7 @@ async def test_embedding_similarity_through_an_embedding_endpoint(
     ("body", "message"),
     [
         ({"suites": ["tool_calling"]}, "tool_call"),
-        ({"suites": ["rag"]}, "Milestone 5"),
+        ({"suites": ["quantization"]}, "Milestone 7"),
         ({"suites": ["answer_quality"], "evaluation": {"tool_mode": "integration"}}, "mode C"),
         (
             {"suites": ["answer_quality"], "evaluation": {"disabled_evaluators": ["nope"]}},
@@ -424,7 +424,7 @@ async def test_profiles_crud_and_runs_from_a_profile(api, migrated_app, scripted
     profile = resp.json()
     assert profile["evaluation"]["token_f1_threshold"] == 0.3
     assert (await api.post("/api/v1/profiles", json=body)).status_code == 409
-    bad = await api.post("/api/v1/profiles", json={**body, "name": "x", "suites": ["rag"]})
+    bad = await api.post("/api/v1/profiles", json={**body, "name": "x", "suites": ["quantization"]})
     assert bad.status_code == 422
     resp = await api.patch(f"/api/v1/profiles/{profile['id']}", json={"description": "For QA sets"})
     assert resp.json()["description"] == "For QA sets"

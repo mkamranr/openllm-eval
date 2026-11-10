@@ -38,7 +38,15 @@ import type {
   RunMetrics,
   RunModel,
 } from "../../types/runs";
-import { EvaluationChips, EvaluationList, QualityCard, SimulationView, SUITE_TITLES, ToolMetricsCard } from "./QualitySection";
+import {
+  EvaluationChips,
+  EvaluationList,
+  EvidenceMetricsCard,
+  QualityCard,
+  SimulationView,
+  SUITE_TITLES,
+  ToolMetricsCard,
+} from "./QualitySection";
 import {
   PROFILE_META,
   RunStatusBadge,
@@ -109,7 +117,9 @@ function ModelProgressList({ run }: { run: RunDetail }) {
         const phase =
           p.phase === "warmup"
             ? `Warm-up ${p.warmup_completed ?? 0}/${p.warmup_planned ?? 0}`
-            : p.phase === "measured"
+            : p.phase === "judging"
+              ? `Judging ${p.judge_completed ?? 0}/${p.judge_planned ?? 0}`
+              : p.phase === "measured"
               ? `Measuring${p.current_concurrency ? ` · concurrency ${p.current_concurrency}` : ""}${p.current_step != null ? ` · step ${p.current_step + 1}` : ""}`
               : m.status === "pending"
                 ? "Waiting"
@@ -775,6 +785,7 @@ export function RunDetailPage() {
 
       {metrics && <QualityCard run={run} get={get} />}
       {metrics && <ToolMetricsCard run={run} get={get} />}
+      {metrics && <EvidenceMetricsCard run={run} get={get} />}
 
       <Card title="Results" icon={ListChecks}>
         <ResultsBrowser run={run} version={resultsVersion} />

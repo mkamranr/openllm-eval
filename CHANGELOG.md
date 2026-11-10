@@ -6,6 +6,49 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added — Milestone 5 (RAG and evidence evaluation)
+- Two new suites, `rag` (rag cases) and `hallucination` (rag and long_context cases). They read
+  only the evidence supplied with each case: the retrieved contexts, or the paragraphs of a
+  long-context document.
+- Claim pipeline (`app/evaluators/evidence.py`): `ClaimExtractor` and `ClaimVerifier`
+  interfaces. Every claim is classified as supported, unsupported, contradicted, or unverifiable
+  (ambiguous, flagged for review) and stored with its evidence excerpt, source identifiers
+  (passage, document, chunk, source, page), rationale, confidence (judge only), method, and a
+  human review status (`not_reviewed`). The default implementation is lexical: word coverage
+  decides support, claims may combine two passages, a number that no passage mentions is a
+  contradiction, and a polarity mismatch is sent to review rather than called a contradiction.
+- RAG evaluators: faithfulness (supported / (supported + unsupported + contradicted);
+  contradicted claims fail the case; not applicable when there are no claims), answer
+  correctness, answer relevance (judge only; skipped without one), context relevance, context
+  precision (average precision from `relevant` labels), context recall (reference claims found
+  in the contexts), citation precision (the cited passage supports the claim), citation recall
+  (expected citations cited), and abstention (`answerable: false` cases should be declined).
+- Hallucination evaluator `claim_support`, plus claim-level metrics: `hallucination.*`
+  (unsupported-claim rate, contradiction rate, unverifiable rate, claim support precision,
+  evidence coverage, answers with contradictions, answers despite insufficient evidence,
+  abstention precision and recall) and `rag.*` (pooled claim faithfulness, contradicted-claim
+  rate). Missing reference data makes an evaluator `not_applicable`; nothing is scored without it.
+- Optional LLM judge (`evaluation.judge`, opt-in, off by default): any registered endpoint,
+  called through its adapter. It extracts and verifies claims and rates answer and context
+  relevance, with a versioned prompt (`judge_prompt_version`). Case content is wrapped as
+  untrusted data, replies must be a JSON object of a fixed shape, and quoted evidence is checked
+  against the passage it names. A judge failure fails the evaluation; it never passes. With a
+  judge, the RAG and hallucination evaluators run after each model's measurement with their own
+  concurrency (`judge.concurrency`), so the judge never slows the measured requests. A resumed
+  run judges earlier answers from their stored text, or records a failed evaluation when the
+  text was not stored in full. The run snapshot records the judge endpoint (secret-free),
+  whether it is also a model under test, and the evidence method.
+- Dataset schema: `retrieved_contexts[].relevant` (optional relevance label). The RAG sample now
+  carries relevance labels. No database migration: claims live in `evaluation_results.evidence`.
+- Settings: `faithfulness_threshold` (0.8) and `support_threshold` (0.65, lexical).
+- UI: RAG and Hallucination check are selectable in the wizard, with judge, faithfulness, and
+  support settings and a data-sharing notice; an "Evidence and claims" card on the run page;
+  judging progress; and a claims table (verdict, evidence, source) in the result drawer.
+- CLI: `evaluation.judge.endpoint` takes an endpoint name; `run results` lists `rag.*` and
+  `hallucination.*` metrics.
+- Mock model server: answers judge prompts with deterministic verdicts, so the judge path works
+  without a real judge model. The smoke test runs a RAG run that judges itself.
+
 ### Added — Milestone 4 (Deterministic evaluators and tool-calling)
 - Evaluator framework (`app/evaluators/`): every evaluator has a name, a version, a suite, a
   kind, and the case types it applies to, and it returns a status (`completed`, `failed`,

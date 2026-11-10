@@ -6,7 +6,7 @@ Please report vulnerabilities privately. Use GitHub's "Report a vulnerability" (
 advisory) on this repository rather than opening a public issue. Include steps to reproduce,
 affected versions, and the impact. We aim to acknowledge reports within 5 business days.
 
-## Current security posture (Milestone 4)
+## Current security posture (Milestone 5)
 
 - **No authentication yet.** By default, Compose binds published ports to `127.0.0.1`. If you set
   `BIND_ADDRESS=0.0.0.0`, the UI and API are reachable by anyone who can reach the host. Do this
@@ -95,6 +95,20 @@ endpoints and trigger requests within this policy.
 - Embedding similarity calls go through the same adapter, network policy, timeouts, and secret
   handling as chat requests, and the run snapshot stores only a secret-free endpoint snapshot.
 - Evaluation evidence and rationales contain dataset and model text only, never secrets.
+
+### LLM judge
+
+- The judge is **opt-in** per run and off by default. When enabled, the questions, retrieved
+  contexts, and answers of the RAG and long-context cases are sent to the judge endpoint. Choose
+  a judge you would trust with that data; a judge on your own infrastructure keeps it local.
+- Judge requests go through the same adapter, network policy, timeouts, and secret handling as
+  every other model call. The snapshot stores a secret-free judge endpoint snapshot.
+- Prompt-injection hygiene: case content is wrapped in `<data>` blocks that it cannot close, the
+  instructions tell the judge to treat it as data, and the reply must be a JSON object of a
+  fixed shape. A malformed or failed reply fails the evaluation; it never passes. Quoted evidence
+  is checked against the named passage. These measures reduce, but cannot rule out, a judge
+  being manipulated by adversarial dataset or answer text, so verdicts keep their rationale for
+  review.
 
 ### Planned
 

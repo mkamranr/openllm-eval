@@ -14,7 +14,7 @@ from typing import Any, ClassVar, Literal
 
 Status = Literal["completed", "failed", "skipped", "not_applicable", "requires_review"]
 STATUSES: tuple[str, ...] = Status.__args__  # type: ignore[attr-defined]
-Kind = Literal["objective", "similarity", "rule_based", "composite"]
+Kind = Literal["objective", "similarity", "rule_based", "composite", "evidence", "model_judged"]
 
 
 @dataclass
@@ -76,8 +76,12 @@ Embedder = Callable[[list[str]], Awaitable[list[list[float]]]]
 class EvaluationContext:
     config: dict[str, Any] = field(default_factory=dict)
     embedder: Embedder | None = None
+    # Optional LLM judge (app.evaluators.judge.Judge); None unless the run opts in.
+    judge: Any = None
     # Outcomes of evaluators already run for this case (composites read them).
     previous: dict[str, EvaluationOutcome] = field(default_factory=dict)
+    # Per-case scratch space shared by evaluators (e.g. one claim analysis for several).
+    cache: dict[str, Any] = field(default_factory=dict)
 
 
 class Evaluator:

@@ -469,7 +469,7 @@ async def test_create_validation(api, mock_server):
         assert resp.status_code == 422, resp.text
         return json.dumps(resp.json()["error"]["details"])
 
-    assert "Milestone 5" in await rejected(suites=["performance", "rag"])
+    assert "Milestone 7" in await rejected(suites=["performance", "quantization"])
     assert "concurrency 1" in await rejected(load={"profile": "sequential", "concurrency": 4})
     assert "at most 5" in await rejected(load={"profile": "smoke", "requests": 10})
     assert "two concurrency steps" in await rejected(

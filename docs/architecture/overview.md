@@ -46,6 +46,9 @@ backend/app/
   evaluators/answer.py    exact / normalized / contains / token F1 / refusal / embedding similarity
   evaluators/structured.py  JSON parsing, JSON Schema conformance, expected-field match
   evaluators/tools.py     tool-call analysis, tool evaluators, fixture-only tool simulation
+  evaluators/evidence.py  passages, citations, claim extraction/verification interfaces, lexical checks
+  evaluators/judge.py     optional LLM judge: prompts, JSON replies, judge extractor and verifier
+  evaluators/rag.py       RAG evaluators and the hallucination claim_support evaluator
   evaluators/registry.py  registry, evaluation framework version, evaluate_case()
   metrics/quality.py      evaluation rows → quality.* and tool.* aggregates
   api/uploads.py          JSON or multipart upload parsing with size caps
@@ -82,7 +85,14 @@ backend/app/
   cli/main.py             `openllm-eval` CLI (typer)
 ```
 
-Later milestones add judges (M5) and `reporting/` (M6). 
+Later milestones add `reporting/` (M6).
+
+With an LLM judge configured, the RAG and hallucination evaluators do not run inline. Each
+model's answers are kept in memory and judged after the model's measured phase (phase
+`judging`), with `judge.concurrency` requests in flight, so judge latency never reduces the
+concurrency the model under test sees. On resume, answers from earlier passes without
+judge-suite evaluations are judged from their stored text; if the text was not stored in full,
+a failed evaluation is recorded instead.
 
 ## Run execution
 

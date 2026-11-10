@@ -41,6 +41,10 @@ Environment:
 * ``MOCK_API_KEY``: if set, requests must send ``Authorization: Bearer <key>``.
 * ``MOCK_SCRIPT``: path to a JSON script file (see above).
 
+Judge requests from OpenLLM-Eval (their system message carries [openllm-eval-judge:<task>])
+get a deterministic mock verdict in the judge's JSON format (see mock_judge), so the LLM-judge
+path can be tried without a real judge model.
+
 Token counts are whitespace word counts (deterministic, not a real tokenizer).
 """
 
@@ -60,6 +64,8 @@ from typing import Any
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
+
+from app.testing.mock_judge import judge_reply, judge_task
 
 MAX_DELAY_MS = 60_000
 
@@ -217,13 +223,20 @@ def create_mock_app(
                 return _error(fail_status, f"Mock transient failure (attempt {seen + 1})")
 
         mode = request.headers.get("x-mock-mode", "echo")
+        task = judge_task(messages)
         text = request.headers.get("x-mock-response") or (
             f"Mock response to: {_last_user_text(messages)[:200]}"
         )
         after_tool = isinstance(messages[-1], dict) and messages[-1].get("role") == "tool"
         tool_calls: list[dict[str, Any]] = []
-        entry = next((e for e in script if str(e.get("match", "")) in last_user), None)
-        if entry is not None:
+        entry = (
+            None
+            if task
+            else next((e for e in script if str(e.get("match", "")) in last_user), None)
+        )
+        if task:
+            text = judge_reply(task, messages)
+        elif entry is not None:
             if after_tool:
                 text = str(
                     entry.get("after_tools")

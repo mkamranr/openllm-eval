@@ -65,13 +65,33 @@ match. String comparison ignores case, and `1` matches `1.0`. A fixture without 
 acts as a fallback. Anything else gets a structured error result.
 
 ### `rag`
-Requires `retrieved_contexts` (`[{"text", "document_id", "chunk_id", "source", "page"}]`).
-`expected_citations` must refer to documents in the contexts. Set `answerable: false` when the
-contexts don't contain the answer. RAG evaluators arrive in Milestone 5.
+Requires `retrieved_contexts` (`[{"text", "document_id", "chunk_id", "source", "page",
+"relevant"}]`). `expected_citations` (`[{"document_id", "chunk_id", "page"}]`) must refer to
+documents in the contexts. Set `answerable: false` when the contexts don't contain the answer; the
+model should then decline.
+
+```json
+{"id": "rag-1", "type": "rag", "input": "How many days of leave do full-time staff get?", "retrieved_contexts": [{"document_id": "policy-001", "chunk_id": "c02", "text": "Full-time employees receive 25 days of paid leave.", "page": 3, "relevant": true}, {"document_id": "policy-002", "text": "Expense claims are due within 30 days.", "relevant": false}], "reference_answer": "25 days of paid leave.", "expected_citations": [{"document_id": "policy-001", "page": 3}]}
+```
+
+What each optional field enables:
+
+| Field | Enables |
+|---|---|
+| `reference_answer` | answer correctness, context recall |
+| `expected_citations` | citation recall |
+| `relevant` on contexts | context precision |
+| `answerable: false` | abstention checks and abstention precision/recall |
+
+The prompt labels each context as `[document_id#chunk_id]` (or `[doc-N]` without an id).
+Citations in the answer are read from square brackets and may name a label, a chunk id, a
+document id, or a context number: `[policy-001]`, `[policy-001#c02]`, `[2]`. A citation of a
+source that was not supplied counts as unsupported.
 
 ### `long_context`
 Requires `context` and `expected_answer`. `answer_location.approximate_position` (0 to 1) records
-where the answer is located.
+where the answer is located. The hallucination suite checks the answer's claims against the
+context, split into paragraphs at blank lines.
 
 ### `safety`
 Requires `expected_behavior`: `refuse` or `comply`. The answer-quality suite checks it with a

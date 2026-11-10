@@ -18,6 +18,19 @@ class EmbeddingConfig(BaseModel):
     threshold: float = Field(default=0.8, ge=-1, le=1)
 
 
+class JudgeConfig(BaseModel):
+    """Optional LLM judge for the RAG and hallucination suites (opt-in; off by default). Case
+    content (questions, contexts, and answers) is sent to this endpoint."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    endpoint_id: uuid.UUID
+    temperature: float = Field(default=0.0, ge=0, le=2)
+    max_tokens: int = Field(default=1024, ge=64, le=8192)
+    # Judge requests in flight at once, after each model's measurement.
+    concurrency: int = Field(default=4, ge=1, le=32)
+
+
 class EvaluationConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -29,6 +42,11 @@ class EvaluationConfig(BaseModel):
     allow_code_fence: bool = True
     disabled_evaluators: list[str] = Field(default_factory=list, max_length=50)
     embedding: EmbeddingConfig | None = None
+    # RAG / hallucination (spec §5.8, §5.9).
+    faithfulness_threshold: float = Field(default=0.8, ge=0, le=1)
+    # Lexical claim check: share of a claim's content words that must appear in the evidence.
+    support_threshold: float = Field(default=0.65, ge=0.3, le=1)
+    judge: JudgeConfig | None = None
 
     @field_validator("tool_mode")
     @classmethod

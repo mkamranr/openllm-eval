@@ -72,7 +72,7 @@ export interface LiveStats {
 }
 
 export interface ModelProgress {
-  phase?: "pending" | "warmup" | "measured" | "done";
+  phase?: "pending" | "warmup" | "measured" | "judging" | "done";
   planned?: number | null;
   completed?: number;
   succeeded?: number;
@@ -84,6 +84,8 @@ export interface ModelProgress {
   current_step?: number | null;
   current_concurrency?: number | null;
   elapsed_s?: number | null;
+  judge_planned?: number;
+  judge_completed?: number;
   live?: LiveStats;
 }
 
@@ -196,6 +198,17 @@ export interface EvaluationConfig {
   allow_code_fence: boolean;
   disabled_evaluators: string[];
   embedding: { endpoint_id: string; threshold: number } | null;
+  faithfulness_threshold: number;
+  support_threshold: number;
+  judge: JudgeConfig | null;
+}
+
+/** Optional LLM judge for the RAG and hallucination suites (opt-in). */
+export interface JudgeConfig {
+  endpoint_id: string;
+  temperature?: number;
+  max_tokens?: number;
+  concurrency?: number;
 }
 
 export type EvaluationStatus = "completed" | "failed" | "skipped" | "not_applicable" | "requires_review";
@@ -237,6 +250,9 @@ export interface EvaluationSnapshot {
   metrics_version?: string;
   tool_execution?: string | null;
   embedding_endpoint?: { name: string; model_identifier: string } | null;
+  judge_endpoint?: { name: string; model_identifier: string; judges_tested_model?: boolean } | null;
+  judge_prompt_version?: string | null;
+  evidence_method?: "lexical" | "judge" | null;
 }
 
 export interface Profile {

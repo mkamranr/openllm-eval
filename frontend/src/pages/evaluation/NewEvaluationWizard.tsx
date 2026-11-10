@@ -461,6 +461,7 @@ function ReviewStep({
   const quality = runnable.filter((k) => QUALITY_TYPES.includes(k));
   const later = draft.evaluationTypes.filter((k) => !IMPLEMENTED_TYPES.includes(k));
   const embedding = endpoints.find((e) => e.id === draft.quality.embeddingEndpointId);
+  const judge = endpoints.find((e) => e.id === draft.quality.judgeEndpointId);
   const p = draft.performance;
   return (
     <div className="form">
@@ -494,6 +495,8 @@ function ReviewStep({
                   {quality.includes("tool_calling") &&
                     ` · tools ${draft.quality.toolMode === "simulated" ? "simulated (fixtures)" : "inspected only"}`}
                   {embedding && ` · embeddings via ${embedding.name}`}
+                  {quality.some((k) => k === "rag" || k === "hallucination") &&
+                    ` · evidence ${judge ? `judged by ${judge.name}` : "checked lexically"}`}
                 </dd>
               </div>
             )}

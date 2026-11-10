@@ -70,8 +70,8 @@ def test_only_implemented_suites_are_accepted():
         "datasets": [{"dataset_id": "00000000-0000-0000-0000-000000000002"}],
     }
     assert RunCreate(**base).suites == ["performance"]
-    with pytest.raises(ValidationError, match="Milestone 5"):
-        RunCreate(**base, suites=["rag"])
+    with pytest.raises(ValidationError, match="Milestone 7"):
+        RunCreate(**base, suites=["quantization"])
     with pytest.raises(ValidationError, match="Unknown suite"):
         RunCreate(**base, suites=["vibes"])
 

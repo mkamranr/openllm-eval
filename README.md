@@ -33,6 +33,7 @@ produced it. Everything runs on your own infrastructure: no telemetry, no CDN, n
 | **Performance** | Smoke, sequential, fixed-concurrency, ramp, and sustained load profiles. TTFT, latency percentiles (p50 to p99), inter-token latency, tokens/s, throughput, and error rates. Warm-up requests are excluded and retries are tracked. |
 | **Answer quality** | Exact, normalized, contains-reference, and token-F1 matching; a refusal heuristic for safety cases; optional embedding similarity. |
 | **Structured output** | JSON validity, JSON Schema (Draft 2020-12) conformance with violation paths, and expected-field match. |
+| **RAG and hallucination** | Faithfulness, citation precision and recall, context relevance, precision and recall, and abstention on unanswerable questions. Every claim is classified as supported, unsupported, contradicted, or unverifiable, with its evidence and source. Lexical by default; an LLM judge is optional. |
 | **Tool calling** | Tool selection measured separately from argument correctness; call precision and recall; invented-tool and malformed-argument rates; and **simulated** tool results from dataset fixtures, so final answers can be checked without executing anything. |
 | **Runs** | A background worker with a database-backed queue and leases, live progress over SSE, cancel and retry-failed, and an immutable, secret-free configuration snapshot for every run. |
 | **Profiles** | Reusable evaluation settings, available from the UI, the API, and the CLI. |
@@ -126,7 +127,7 @@ and served by nginx. See the [architecture overview](docs/architecture/overview.
 - [x] **M2** Versioned datasets and validation
 - [x] **M3** Run engine and performance metrics
 - [x] **M4** Deterministic evaluators, tool calling, evaluation profiles
-- [ ] **M5** LLM-as-judge, RAG faithfulness, hallucination indicators
+- [x] **M5** RAG and evidence evaluation, optional LLM judge, hallucination indicators
 - [ ] **M6** Run comparison and reports
 - [ ] **M7** Quantization and context-window studies
 

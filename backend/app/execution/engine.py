@@ -18,6 +18,10 @@ Reliability model:
   response in memory (not the stored, possibly truncated copy). Evaluation rows are buffered and
   flushed in the same transaction as their result rows. Simulated tool execution (spec §5.7
   mode B) sends follow-up requests with fixture tool results; nothing is ever executed.
+* With an LLM judge (M5, opt-in), the RAG and hallucination evaluators run after each model's
+  measurement instead of inline, with their own concurrency, so judge latency never holds back
+  the measured lanes. A resumed run judges earlier results from their stored text; a response
+  that was not stored in full is recorded as a failed evaluation rather than guessed.
 """
 
 from __future__ import annotations
@@ -65,8 +69,9 @@ from app.db.models.run import (
     RunCaseResult,
     RunModel,
 )
-from app.evaluators.base import EvaluationContext, ModelOutput, ToolCallOutput
-from app.evaluators.registry import evaluate_case, evaluators_for
+from app.evaluators.base import EvaluationContext, Evaluator, ModelOutput, ToolCallOutput
+from app.evaluators.judge import Judge
+from app.evaluators.registry import JUDGE_SUITES, QUALITY_SUITES, evaluate_case, evaluators_for
 from app.evaluators.tools import needs_simulation, simulate_tool_result
 from app.execution.plan import Step, steps_of
 from app.execution.prompting import build_request
@@ -79,7 +84,6 @@ logger = get_logger(__name__)
 MAX_BACKOFF_SECONDS = 60.0
 MAX_ERROR_MESSAGE_CHARS = 2000
 MAX_TOOL_RESULT_CHARS = 2000
-QUALITY_SUITES = ("answer_quality", "structured_output", "tool_calling")
 
 
 def utcnow() -> datetime:
@@ -199,6 +203,10 @@ class ModelState:
     current_concurrency: int | None = None
     pass_succeeded: int = 0
     measured_started: float | None = None  # monotonic
+    # Outputs waiting for the judge phase: (result id, case, output).
+    pending_judge: list[tuple[uuid.UUID, CaseSpec, ModelOutput]] = field(default_factory=list)
+    judge_planned: int = 0
+    judge_completed: int = 0
 
     def progress(self) -> dict[str, Any]:
         finals = list(self.finals.values())
@@ -222,6 +230,8 @@ class ModelState:
             "current_step": self.current_step,
             "current_concurrency": self.current_concurrency,
             "elapsed_s": round(elapsed, 3) if elapsed is not None else None,
+            "judge_planned": self.judge_planned,
+            "judge_completed": self.judge_completed,
             # Live indications from results so far; final metrics come from aggregation.
             "live": {
                 "latency_ms_p50": percentile(latencies, 50),
@@ -266,7 +276,12 @@ class RunExecutor:
         self.pass_number = 0
         # Quality evaluation (configured from the snapshot in execute()).
         self._eval_buffer: list[dict[str, Any]] = []
-        self.evaluators: list[Any] = []
+        self.evaluators: list[Evaluator] = []
+        # With a judge, evaluators of the judge suites run in the judge phase (deferred).
+        self.inline_evaluators: list[Evaluator] = []
+        self.deferred_evaluators: list[Evaluator] = []
+        self.judge: Judge | None = None
+        self.judge_concurrency = 1
         self.eval_config: dict[str, Any] = {}
         self.embedder: Any = None
         self.simulate_tools = False
@@ -615,7 +630,15 @@ class RunExecutor:
                 completed=completed,
                 simulation=simulation,
             )
-            evals = await self._evaluate(state, spec, row, output) if output is not None else []
+            evals = (
+                await self._evaluate(state, spec, row["id"], output, self.inline_evaluators)
+                if output is not None
+                else []
+            )
+            if output is not None and any(
+                spec.case.get("type") in e.case_types for e in self.deferred_evaluators
+            ):
+                state.pending_judge.append((row["id"], spec, output))
             # Appended together (no await in between), so a cancelled task records neither.
             self._buffer.append(row)
             self._eval_buffer.extend(evals)
@@ -726,17 +749,26 @@ class RunExecutor:
         }
 
     async def _evaluate(
-        self, state: ModelState, spec: CaseSpec, row: dict[str, Any], output: ModelOutput
+        self,
+        state: ModelState,
+        spec: CaseSpec,
+        result_id: uuid.UUID,
+        output: ModelOutput,
+        evaluators: list[Evaluator],
     ) -> list[dict[str, Any]]:
-        context = EvaluationContext(config=self.eval_config, embedder=self.embedder)
-        outcomes = await evaluate_case(spec.case, output, self.evaluators, context)
+        if not evaluators:
+            return []
+        context = EvaluationContext(
+            config=self.eval_config, embedder=self.embedder, judge=self.judge
+        )
+        outcomes = await evaluate_case(spec.case, output, evaluators, context)
         now = utcnow()
         return [
             {
                 "id": uuid.uuid4(),
                 "run_id": self.run_id,
                 "run_model_id": state.run_model_id,
-                "run_case_result_id": row["id"],
+                "run_case_result_id": result_id,
                 "suite": o.suite,
                 "evaluator_name": o.evaluator,
                 "evaluator_version": o.evaluator_version,
@@ -800,6 +832,109 @@ class RunExecutor:
         if self._stop.is_set():
             raise StopRun
 
+    async def _resumed_judge_items(
+        self, state: ModelState, skip: set[uuid.UUID]
+    ) -> tuple[list[tuple[uuid.UUID, CaseSpec, ModelOutput]], list[tuple[uuid.UUID, CaseSpec]]]:
+        """Results from earlier passes that still lack judge-suite evaluations. Those whose full
+        text was stored can be judged; the others cannot."""
+        judged = (
+            select(EvaluationResult.id)
+            .where(
+                EvaluationResult.run_case_result_id == RunCaseResult.id,
+                EvaluationResult.suite.in_(JUDGE_SUITES),
+            )
+            .exists()
+        )
+        async with self.factory() as session:
+            rows = await session.execute(
+                select(
+                    RunCaseResult.id, RunCaseResult.dataset_case_id, RunCaseResult.response_data
+                ).where(
+                    RunCaseResult.run_model_id == state.run_model_id,
+                    RunCaseResult.phase == PHASE_MEASURED,
+                    RunCaseResult.is_final.is_(True),
+                    RunCaseResult.status == RESULT_SUCCEEDED,
+                    ~judged,
+                )
+            )
+        specs = {s.dataset_case_id: s for s in self.cases}
+        types = {t for e in self.deferred_evaluators for t in e.case_types}
+        ready: list[tuple[uuid.UUID, CaseSpec, ModelOutput]] = []
+        lost: list[tuple[uuid.UUID, CaseSpec]] = []
+        for result_id, case_id, data in rows:
+            spec = specs.get(case_id)
+            if result_id in skip or spec is None or spec.case.get("type") not in types:
+                continue
+            data = data or {}
+            if data.get("stored") and not data.get("content_truncated"):
+                ready.append((result_id, spec, ModelOutput(content=data.get("content"))))
+            else:
+                lost.append((result_id, spec))
+        return ready, lost
+
+    async def _judge_phase(self, state: ModelState) -> None:
+        """Run the deferred (judge-backed) evaluators for one model's results."""
+        if not self.deferred_evaluators or self._stop.is_set():
+            return
+        items, state.pending_judge = state.pending_judge, []
+        ready, lost = await self._resumed_judge_items(state, {i[0] for i in items})
+        items += ready
+        now = utcnow()
+        for result_id, spec in lost:
+            for e in self.deferred_evaluators:
+                if spec.case.get("type") not in e.case_types:
+                    continue
+                self._eval_buffer.append(
+                    {
+                        "id": uuid.uuid4(),
+                        "run_id": self.run_id,
+                        "run_model_id": state.run_model_id,
+                        "run_case_result_id": result_id,
+                        "suite": e.suite,
+                        "evaluator_name": e.name,
+                        "evaluator_version": e.version,
+                        "status": "failed",
+                        "score": None,
+                        "passed": None,
+                        "label": None,
+                        "rationale": "The run was resumed and this response was not stored in "
+                        "full (RUN_STORE_RESPONSES / RUN_RESPONSE_MAX_CHARS), so it could not be "
+                        "judged.",
+                        "evidence": [],
+                        "metadata_": {"method": "judge", "deferred": True},
+                        "created_at": now,
+                    }
+                )
+        if not items:
+            return
+        state.phase = "judging"
+        state.judge_planned = len(items)
+        state.judge_completed = 0
+        semaphore = asyncio.Semaphore(self.judge_concurrency)
+
+        async def judge_one(result_id: uuid.UUID, spec: CaseSpec, output: ModelOutput) -> None:
+            async with semaphore:
+                if self._stop.is_set():
+                    return
+                evals = await self._evaluate(
+                    state, spec, result_id, output, self.deferred_evaluators
+                )
+                self._eval_buffer.extend(evals)
+                state.judge_completed += 1
+
+        work = asyncio.ensure_future(asyncio.gather(*(judge_one(*i) for i in items)))
+        stopped = asyncio.ensure_future(self._stop.wait())
+        try:
+            await asyncio.wait({work, stopped}, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            stopped.cancel()
+            if not work.done():
+                work.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await work
+        if not work.cancelled() and work.exception() is not None:
+            raise work.exception()  # type: ignore[misc]
+
     def _todo(self, state: ModelState, indices: Iterable[int], retry_failed: bool) -> list[int]:
         out = []
         for i in indices:
@@ -828,6 +963,7 @@ class RunExecutor:
             duration = st.duration_seconds if self.pass_number == 1 else None
             work.append((st, iter(todo), duration))
         if not work:
+            await self._judge_phase(state)
             self._model_status[rm.id] = "completed"
             return
 
@@ -856,6 +992,7 @@ class RunExecutor:
             state.current_concurrency = st.concurrency
             deadline = time.monotonic() + duration if duration else None
             await self._pool(state, indices, st.concurrency, st.step, deadline)
+        await self._judge_phase(state)
         state.phase = "done"
         self._model_status[rm.id] = "completed"
         async with self.factory() as session:
@@ -1001,6 +1138,25 @@ class RunExecutor:
             embed_adapter = self._adapter_from_snapshot(embedding_snapshot, None)
             adapters.append(embed_adapter)
             self.embedder = embed_adapter.embed
+        self.inline_evaluators = list(self.evaluators)
+        judge_snapshot = evaluation.get("judge_endpoint")
+        judge_config = self.eval_config.get("judge") or {}
+        if self.evaluators and judge_snapshot:
+            judge_adapter = self._adapter_from_snapshot(judge_snapshot, None)
+            adapters.append(judge_adapter)
+            self.judge = Judge(
+                adapter=judge_adapter,
+                identity={
+                    "endpoint": judge_snapshot.get("name"),
+                    "endpoint_id": judge_snapshot.get("endpoint_id"),
+                    "model_identifier": judge_snapshot.get("model_identifier"),
+                },
+                temperature=float(judge_config.get("temperature") or 0.0),
+                max_tokens=int(judge_config.get("max_tokens") or 1024),
+            )
+            self.judge_concurrency = int(judge_config.get("concurrency") or 4)
+            self.deferred_evaluators = [e for e in self.evaluators if e.suite in JUDGE_SUITES]
+            self.inline_evaluators = [e for e in self.evaluators if e.suite not in JUDGE_SUITES]
         done = asyncio.Event()
         control: asyncio.Task[None] | None = None
         try:
@@ -1048,6 +1204,8 @@ class RunExecutor:
                     await adapter.close()
 
         await self.flush()
+        if self.judge is not None:
+            log.info("judge_usage", calls=self.judge.calls, failures=self.judge.failures)
         if self.stop_reason == "lease_lost":
             log.warning("run_abandoned_lease_lost")
             return None

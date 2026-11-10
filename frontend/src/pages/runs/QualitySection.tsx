@@ -1,6 +1,6 @@
-import { CheckCircle2, FlaskConical, Wrench, XCircle } from "lucide-react";
+import { CheckCircle2, FileSearch, FlaskConical, Wrench, XCircle } from "lucide-react";
 
-import { Card } from "../../components/ui";
+import { Callout, Card } from "../../components/ui";
 import { useAsync } from "../../hooks/useAsync";
 import { api } from "../../services/api";
 import type { EvaluationResult, EvaluationSummary, EvaluatorInfo, MetricValue, RunDetail, Simulation } from "../../types/runs";
@@ -12,6 +12,8 @@ export const SUITE_TITLES: Record<string, string> = {
   answer_quality: "Answer quality",
   structured_output: "Structured output",
   tool_calling: "Tool calling",
+  rag: "RAG",
+  hallucination: "Hallucination",
 };
 
 /** Titles and descriptions for evaluator names (falls back to the name). */
@@ -91,7 +93,7 @@ export function QualityCard({ run, get }: { run: RunDetail; get: Get }) {
       <p className="small muted" style={{ margin: 0 }}>
         Each evaluator is shown on its own; there is no combined quality score. Pass rates count only cases where the
         evaluator applied; "—" means no applicable case (hover for details). Similarity scores are not proof of
-        correctness, and the refusal check is a phrase heuristic.
+        correctness, and the refusal and abstention checks are phrase heuristics.
       </p>
     </Card>
   );
@@ -193,6 +195,7 @@ export function EvaluationList({ evaluations }: { evaluations: EvaluationResult[
               </span>
             </div>
             {e.rationale && <div className="small">{e.rationale}</div>}
+            {isClaimList(e.evidence) && <ClaimTable claims={e.evidence as unknown as Claim[]} />}
             {e.evidence.length > 0 && (
               <details>
                 <summary className="small">Evidence ({e.evidence.length})</summary>
@@ -202,6 +205,131 @@ export function EvaluationList({ evaluations }: { evaluations: EvaluationResult[
           </li>
         ))}
       </ul>
+    </div>
+  );
+}
+
+const EVIDENCE_ROWS: { name: string; label: string; lowerIsBetter?: boolean }[] = [
+  { name: "rag.claim_faithfulness", label: "Claim faithfulness (pooled)" },
+  { name: "rag.contradicted_claim_rate", label: "Contradicted claims", lowerIsBetter: true },
+  { name: "hallucination.claim_support_precision", label: "Claim support precision" },
+  { name: "hallucination.unsupported_claim_rate", label: "Unsupported claims", lowerIsBetter: true },
+  { name: "hallucination.contradiction_rate", label: "Contradicted claims", lowerIsBetter: true },
+  { name: "hallucination.unverifiable_claim_rate", label: "Unverifiable (needs review)", lowerIsBetter: true },
+  { name: "hallucination.evidence_coverage", label: "Evidence coverage" },
+  { name: "hallucination.answers_with_contradictions", label: "Answers with a contradiction", lowerIsBetter: true },
+  { name: "hallucination.answer_despite_insufficient_evidence", label: "Answered without evidence", lowerIsBetter: true },
+  { name: "hallucination.abstention_precision", label: "Abstention precision" },
+  { name: "hallucination.abstention_recall", label: "Abstention recall" },
+];
+
+export function EvidenceMetricsCard({ run, get }: { run: RunDetail; get: Get }) {
+  const evaluation = run.configuration_snapshot.evaluation;
+  const suites = evaluation?.suites ?? [];
+  if (!suites.includes("rag") && !suites.includes("hallucination")) return null;
+  const judge = evaluation?.judge_endpoint;
+  const rows = EVIDENCE_ROWS.filter((r) => suites.includes(r.name.split(".")[0]!));
+  return (
+    <Card title="Evidence and claims" icon={FileSearch}
+      action={
+        <span className="small muted">
+          {judge ? `LLM judge: ${judge.name} (${judge.model_identifier})` : "Lexical evidence checks (no judge)"}
+        </span>
+      }>
+      {judge?.judges_tested_model && (
+        <Callout tone="warn">The judge is also one of the models under test, so it grades its own answers.</Callout>
+      )}
+      <div className="table-wrap">
+        <table className="table" aria-label="Evidence metrics">
+          <thead>
+            <tr>
+              <th scope="col">Metric</th>
+              {run.models.map((m) => <th key={m.id} scope="col" className="num">{m.name}</th>)}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => (
+              <tr key={row.name}>
+                <td>
+                  {row.label}
+                  {row.lowerIsBetter && <span className="cell-sub"> (lower is better)</span>}
+                </td>
+                {run.models.map((m) => <RateCell key={m.id} m={get(m.id, row.name, "ratio")} />)}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="small muted" style={{ margin: "10px 0 0" }}>
+        Claims are compared with the evidence supplied in the dataset only; a supported claim is not proven true, and
+        the retrieved context may itself be wrong. Supported, unsupported, contradicted, and unverifiable claims are
+        counted separately; open a case to see each claim with its evidence and source.
+      </p>
+    </Card>
+  );
+}
+
+interface Claim {
+  claim: string;
+  classification: "supported" | "unsupported" | "contradicted" | "unverifiable";
+  evidence: string | null;
+  passage: string | null;
+  document_id?: string | null;
+  chunk_id?: string | null;
+  page?: number | null;
+  rationale: string;
+  confidence: number | null;
+  method: string;
+  review_recommended: boolean;
+}
+
+const CLAIM_TONE: Record<Claim["classification"], string> = {
+  supported: "ok",
+  unsupported: "warn",
+  contradicted: "error",
+  unverifiable: "neutral",
+};
+
+function isClaimList(evidence: Record<string, unknown>[]) {
+  return evidence.length > 0 && evidence.every((e) => typeof e.classification === "string" && typeof e.claim === "string");
+}
+
+function source(c: Claim) {
+  if (!c.passage && !c.document_id) return "—";
+  const doc = c.document_id ?? c.passage;
+  return `${doc}${c.chunk_id ? ` #${c.chunk_id}` : ""}${c.page != null ? ` · p.${c.page}` : ""}`;
+}
+
+export function ClaimTable({ claims }: { claims: Claim[] }) {
+  return (
+    <div className="table-wrap" style={{ marginTop: 8 }}>
+      <table className="table" aria-label="Claims">
+        <thead>
+          <tr>
+            <th scope="col">Claim</th>
+            <th scope="col">Verdict</th>
+            <th scope="col">Evidence</th>
+            <th scope="col">Source</th>
+          </tr>
+        </thead>
+        <tbody>
+          {claims.map((c, i) => (
+            <tr key={i}>
+              <td>
+                <div className="cell-main">{c.claim}</div>
+                <div className="cell-sub">{c.rationale}</div>
+              </td>
+              <td>
+                <span className={`badge badge-${CLAIM_TONE[c.classification] ?? "neutral"}`}>{c.classification}</span>
+                {c.review_recommended && <div className="cell-sub">review</div>}
+                {c.confidence != null && <div className="cell-sub">judge confidence {fmt(c.confidence, 2)}</div>}
+              </td>
+              <td className="small">{c.evidence ?? "—"}</td>
+              <td className="mono small">{source(c)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }

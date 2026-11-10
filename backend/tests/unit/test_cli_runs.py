@@ -240,6 +240,9 @@ evaluation:
   embedding:
     endpoint: local-vllm
     threshold: 0.85
+  judge:
+    endpoint: local-vllm
+    concurrency: 2
 """
 
 
@@ -260,6 +263,7 @@ def test_run_create_with_profile_evaluation_and_quality_summary(monkeypatch, tmp
                 ("quality.exact_match", "pass_rate", 0.5),
                 ("quality.exact_match", "mean_score", 0.5),
                 ("tool.selection_accuracy", "ratio", None),
+                ("hallucination.contradiction_rate", "ratio", 0.25),
             ]
         ],
     }
@@ -285,8 +289,10 @@ def test_run_create_with_profile_evaluation_and_quality_summary(monkeypatch, tmp
     assert payload["evaluation"] == {
         "tool_mode": "generation_only",
         "embedding": {"threshold": 0.85, "endpoint_id": EP["id"]},
+        "judge": {"concurrency": 2, "endpoint_id": EP["id"]},
     }
     # Not set in the config, so the profile's values apply.
     assert "load" not in payload and "generation" not in payload
     assert "quality.exact_match" in result.output and "50.0%" in result.output
     assert "tool.selection_accuracy" in result.output
+    assert "hallucination.contradiction_rate" in result.output

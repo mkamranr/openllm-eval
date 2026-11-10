@@ -6,16 +6,27 @@ from typing import Any
 
 from app.evaluators.answer import answer_evaluators
 from app.evaluators.base import EvaluationContext, EvaluationOutcome, Evaluator, ModelOutput
+from app.evaluators.rag import hallucination_evaluators, rag_evaluators
 from app.evaluators.structured import structured_evaluators
 from app.evaluators.tools import tool_evaluators
 
 # Bumped when the registry's composition or shared normalization changes.
-EVALUATION_FRAMEWORK_VERSION = "1"
+EVALUATION_FRAMEWORK_VERSION = "2"
 
-QUALITY_SUITES = ("answer_quality", "structured_output", "tool_calling")
+QUALITY_SUITES = ("answer_quality", "structured_output", "tool_calling", "rag", "hallucination")
+# Suites whose evaluators use the LLM judge when a run configures one. With a judge they run after
+# each model's measurement, so judge latency never holds back the measured request lanes.
+JUDGE_SUITES = ("rag", "hallucination")
 
 _REGISTRY: dict[str, Evaluator] = {
-    e.name: e for e in [*answer_evaluators(), *structured_evaluators(), *tool_evaluators()]
+    e.name: e
+    for e in [
+        *answer_evaluators(),
+        *structured_evaluators(),
+        *tool_evaluators(),
+        *rag_evaluators(),
+        *hallucination_evaluators(),
+    ]
 }
 
 
@@ -42,6 +53,7 @@ async def evaluate_case(
     ``failed`` outcome; it never stops the others or the run."""
     outcomes: list[EvaluationOutcome] = []
     context.previous = {}
+    context.cache = {}
     case_type = case.get("type")
     for evaluator in evaluators:
         if case_type not in evaluator.case_types:

@@ -264,6 +264,8 @@ types it understands:
 | `answer_quality` | qa, chat, instruction, long_context, safety | exact_match, normalized_match, contains_reference, token_f1, refusal_behavior (safety), embedding_similarity (optional) |
 | `structured_output` | structured_output | json_valid, json_schema, json_expected_match |
 | `tool_calling` | tool_call | tool_selection, tool_argument_names, tool_argument_schema, tool_required_arguments, tool_argument_values, tool_sequence, tool_hallucination, tool_final_answer, tool_task_success |
+| `rag` (M5) | rag | rag_faithfulness, rag_answer_correctness, rag_answer_relevance (judge), rag_context_relevance, rag_context_precision, rag_context_recall, rag_citation_precision, rag_citation_recall, rag_abstention |
+| `hallucination` (M5) | rag, long_context | claim_support |
 
 `GET /api/v1/evaluators` lists every evaluator with its version and definition. A run is
 rejected (422) if none of its datasets has a case type for a selected quality suite.
@@ -308,6 +310,19 @@ evaluation:
 the **Evaluation Profiles** page, with **Save as profile** in the wizard's Review step, or via
 `POST /api/v1/profiles`. A run that names a profile uses its settings for anything the request
 does not set, and its snapshot copies them, so later profile edits don't change past runs.
+
+To try the LLM judge without a real judge model, register the mock server as the judge: it
+recognizes judge prompts (`[openllm-eval-judge:<task>]` in the system message) and answers with
+deterministic verdicts derived from the lexical checks. They exercise the judge path; they are
+not meaningful judgments.
+
+```yaml
+evaluation:
+  suites: [performance, rag, hallucination]
+  judge:
+    endpoint: mock        # any registered endpoint; case content is sent to it
+    concurrency: 4
+```
 
 The mock model server can be scripted for repeatable quality demos: set `MOCK_SCRIPT` to a JSON
 file with a list of `{"match": "<text in the last user message>", "response": "...",

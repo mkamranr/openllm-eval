@@ -148,7 +148,15 @@ One row per evaluator per evaluated attempt: `run_id`, `run_model_id`, `run_case
 (nullable), `label`, `rationale`, `evidence` (JSON), and `metadata` (JSON). The unique key is
 (`run_case_result_id`, `evaluator_name`); the index on (`run_id`, `evaluator_name`) serves the
 results filters. Rows are written in the same transaction as their attempt. Quality aggregates
-(`quality.*`, `tool.*`) go into `run_aggregate_metrics` like the performance metrics.
+(`quality.*`, `tool.*`, `rag.*`, `hallucination.*`) go into `run_aggregate_metrics` like the
+performance metrics.
+
+Claim-based evaluators (M5) store one `evidence` entry per claim: `claim`, `classification`
+(`supported`, `unsupported`, `contradicted`, `unverifiable`), `evidence` (excerpt), `passage`,
+`document_id`, `chunk_id`, `source`, `page`, `supporting_passages`, `citations`, `rationale`,
+`confidence` (judge only), `method`, `review_recommended`, and `review_status`. Their `metadata`
+holds `claim_counts`, the extractor and verifier names and versions, the judge identity and
+prompt version, and the abstention state. M5 adds no migration.
 
 ## Proposed (each table is added by the milestone that uses it)
 

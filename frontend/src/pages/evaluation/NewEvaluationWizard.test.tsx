@@ -71,7 +71,7 @@ describe("NewEvaluationWizard", () => {
     const quality = screen.getByLabelText("Quality settings");
     expect(within(quality).getByRole("radio", { name: "Simulated results" })).toHaveAttribute("aria-checked", "true");
     expect(within(quality).getByText(/Nothing is ever executed/)).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: /Hallucination check/ }));
+    await user.click(screen.getByRole("button", { name: /Quantization/ }));
 
     // Run settings appear and are validated before moving on.
     const settings = screen.getByLabelText("Run settings");
@@ -98,13 +98,13 @@ describe("NewEvaluationWizard", () => {
     const summary = screen.getByLabelText("Evaluation summary");
     expect(summary).toHaveTextContent("Prod benchmark");
     expect(summary).toHaveTextContent("1 model");
-    expect(summary).toHaveTextContent("Tool-calling, Performance, Hallucination check");
+    expect(summary).toHaveTextContent("Tool-calling, Performance, Quantization");
     expect(summary).toHaveTextContent("QualityTool-calling · tools simulated (fixtures)");
     expect(summary).toHaveTextContent("1 dataset · 12 cases");
     expect(screen.getByLabelText("Selected models")).toHaveTextContent("local-vllm");
     expect(summary).toHaveTextContent("Fixed concurrency: 20 requests at concurrency 8");
     expect(summary).toHaveTextContent("1 per model (excluded from metrics)");
-    expect(screen.getByText(/arrives in a later milestone/)).toHaveTextContent("Hallucination check");
+    expect(screen.getByText(/arrives in a later milestone/)).toHaveTextContent("Quantization");
 
     // Stepper lets you jump back to a completed step.
     await user.click(screen.getByRole("button", { name: /Basic Setup/ }));
@@ -122,7 +122,7 @@ describe("NewEvaluationWizard", () => {
         endpointIds: ["e1"],
         evaluationTypes: ["performance", "answer_quality", "rag"],
         datasetIds: ["d1"],
-        quality: { f1Threshold: "0.6" },
+        quality: { f1Threshold: "0.6", judgeEndpointId: "e1", judgeConcurrency: "2" },
         performance: { profile: "ramp", rampSteps: "1, 2, 4", requestsPerStep: "5", stream: false, temperature: "" },
       }),
     );
@@ -141,7 +141,7 @@ describe("NewEvaluationWizard", () => {
       project_id: null,
       endpoint_ids: ["e1"],
       datasets: [{ dataset_id: "d1" }],
-      suites: ["performance", "answer_quality"],
+      suites: ["performance", "answer_quality", "rag"],
       generation: { temperature: null, max_tokens: 256 },
       load: {
         profile: "ramp",
@@ -152,7 +152,15 @@ describe("NewEvaluationWizard", () => {
         ramp_concurrency: [1, 2, 4],
         requests_per_step: 5,
       },
-      evaluation: { tool_mode: "simulated", token_f1_threshold: 0.6, allow_code_fence: true, embedding: null },
+      evaluation: {
+        tool_mode: "simulated",
+        token_f1_threshold: 0.6,
+        allow_code_fence: true,
+        embedding: null,
+        faithfulness_threshold: 0.8,
+        support_threshold: 0.65,
+        judge: { endpoint_id: "e1", concurrency: 2 },
+      },
       profile_id: null,
     });
     // The identifying fields reset; the performance settings are kept for next time.
@@ -191,10 +199,32 @@ describe("NewEvaluationWizard", () => {
     expect(calls.find((c) => c.method === "POST" && c.path === "/runs")?.body).toMatchObject({ profile_id: "pf1" });
   });
 
+  it("offers an optional LLM judge for RAG and validates its settings", async () => {
+    window.localStorage.setItem(
+      DRAFT_KEY,
+      JSON.stringify({ step: 1, name: "RAG", endpointIds: ["e1"], evaluationTypes: ["rag"], datasetIds: [] }),
+    );
+    stub();
+    const user = userEvent.setup();
+    renderWizard();
+    const quality = await screen.findByLabelText("Quality settings");
+    expect(within(quality).getByLabelText("LLM judge (optional)")).toHaveValue("");
+    expect(within(quality).getByLabelText("Lexical support threshold")).toHaveValue(0.65);
+    expect(within(quality).queryByText(/sent to the judge endpoint/)).not.toBeInTheDocument();
+    await user.selectOptions(within(quality).getByLabelText("LLM judge (optional)"), "e1");
+    expect(within(quality).getByText(/sent to the judge endpoint/)).toBeInTheDocument();
+    const concurrency = within(quality).getByLabelText("Judge concurrency");
+    await user.clear(concurrency);
+    await user.type(concurrency, "99");
+    expect(within(quality).getByText("Use a whole number from 1 to 32.")).toBeInTheDocument();
+    await user.clear(within(quality).getByLabelText("Faithfulness pass threshold"));
+    expect(within(quality).getAllByText("Use a value between 0 and 1.").length).toBe(1);
+  });
+
   it("cannot start with only types from later milestones", async () => {
     window.localStorage.setItem(
       DRAFT_KEY,
-      JSON.stringify({ step: 3, name: "Later only", endpointIds: ["e1"], evaluationTypes: ["rag"], datasetIds: ["d1"] }),
+      JSON.stringify({ step: 3, name: "Later only", endpointIds: ["e1"], evaluationTypes: ["quantization"], datasetIds: ["d1"] }),
     );
     stub();
     renderWizard();

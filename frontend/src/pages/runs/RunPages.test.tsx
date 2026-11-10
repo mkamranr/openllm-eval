@@ -192,7 +192,7 @@ describe("RunDetailPage", () => {
             { name: "exact_match", version: "1.0.0", suite: "answer_quality", kind: "objective" },
             { name: "tool_selection", version: "1.0.0", suite: "tool_calling", kind: "objective" },
           ],
-          config: { tool_mode: "simulated", max_tool_rounds: 3, token_f1_threshold: 0.5, allow_code_fence: true, disabled_evaluators: [], embedding: null },
+          config: { tool_mode: "simulated", max_tool_rounds: 3, token_f1_threshold: 0.5, allow_code_fence: true, disabled_evaluators: [], embedding: null, faithfulness_threshold: 0.8, support_threshold: 0.65, judge: null },
           framework_version: "1",
           metrics_version: "1",
           tool_execution: "Simulated: fixture results only; nothing is executed.",
@@ -267,5 +267,82 @@ describe("RunDetailPage", () => {
     expect(drawer).toHaveTextContent("Simulated tool execution");
     expect(drawer).toHaveTextContent('get_weather({"city":"Paris"})');
     expect(drawer).toHaveTextContent("It is sunny.");
+  });
+  it("shows evidence metrics, the judge, and each claim with its source", async () => {
+    const config = {
+      tool_mode: "simulated" as const, max_tool_rounds: 3, token_f1_threshold: 0.5, allow_code_fence: true,
+      disabled_evaluators: [], embedding: null, faithfulness_threshold: 0.8, support_threshold: 0.65,
+      judge: { endpoint_id: "e9", concurrency: 4 },
+    };
+    const run = makeRun({
+      id: "rr",
+      suites: ["performance", "rag", "hallucination"],
+      models: [makeRunModel({ progress: { phase: "judging", judge_planned: 6, judge_completed: 2 }, status: "running", completed_at: null })],
+      status: "running",
+      configuration_snapshot: {
+        ...makeRun().configuration_snapshot,
+        evaluation: {
+          suites: ["rag", "hallucination"],
+          evaluators: [
+            { name: "rag_faithfulness", version: "1.0.0", suite: "rag", kind: "evidence" },
+            { name: "claim_support", version: "1.0.0", suite: "hallucination", kind: "evidence" },
+          ],
+          config,
+          judge_endpoint: { name: "judge-70b", model_identifier: "llama-70b", judges_tested_model: true },
+          evidence_method: "judge",
+        },
+      },
+    });
+    const faith = { evaluator_name: "rag_faithfulness", suite: "rag", status: "completed" as const, score: 0, passed: false, label: "contradicted" };
+    const result = makeResult({ id: "rx", case_identifier: "rag-002", evaluations: [faith] });
+    stubFetch((method, path) => {
+      if (path === "/evaluators")
+        return jsonResponse([
+          { name: "rag_faithfulness", version: "1.0.0", suite: "rag", kind: "evidence", title: "Faithfulness", description: "", case_types: ["rag"], optional: false },
+        ]);
+      if (method === "GET" && path === "/runs/rr") return jsonResponse(run);
+      if (path === "/runs/rr/metrics")
+        return jsonResponse({
+          run_id: "rr", live: true, metrics_version: "2",
+          items: [
+            ...METRICS,
+            makeMetric("hallucination.contradiction_rate", "ratio", 0.25, { sample_count: 4 }),
+            makeMetric("hallucination.abstention_recall", "ratio", null, { sample_count: 0, metadata: { unavailable_reason: "No case is labeled unanswerable." } }),
+          ],
+        });
+      if (path === "/runs/rr/results/rx")
+        return jsonResponse({
+          ...result,
+          evaluations: [{
+            ...faith, id: "ev9", evaluator_version: "1.0.0", rationale: "Faithfulness 0.00", metadata: { method: "judge" }, created_at: "2026-11-01T00:00:00Z",
+            evidence: [{
+              claim: "Claims are due within 45 days.", classification: "contradicted", evidence: "within 30 days of purchase",
+              passage: "policy-002#c01", document_id: "policy-002", chunk_id: "c01", page: 1, rationale: "30, not 45.",
+              confidence: 0.9, method: "judge_verifier", review_recommended: false, review_status: "not_reviewed",
+            }],
+          }],
+        });
+      if (path.startsWith("/runs/rr/results?")) return jsonResponse(page([result]));
+      if (path.startsWith("/runs/rr/events")) return undefined;
+      return undefined;
+    });
+    const user = userEvent.setup();
+    renderAt("/runs/rr");
+
+    expect(await screen.findByText("Judging 2/6")).toBeInTheDocument();
+    const evidence = await screen.findByRole("table", { name: "Evidence metrics" });
+    expect(within(evidence).getByText("25.0%")).toBeInTheDocument();
+    expect(within(evidence).getByTitle(/No case is labeled unanswerable/)).toHaveTextContent("—");
+    expect(screen.getByText("LLM judge: judge-70b (llama-70b)")).toBeInTheDocument();
+    expect(screen.getByText(/grades its own answers/)).toBeInTheDocument();
+
+    await user.click(within(screen.getByRole("table", { name: "Request results" })).getByRole("button", { name: "rag-002" }));
+    const drawer = await screen.findByRole("dialog");
+    const claims = await within(drawer).findByRole("table", { name: "Claims" });
+    expect(claims).toHaveTextContent("Claims are due within 45 days.");
+    expect(claims).toHaveTextContent("contradicted");
+    expect(claims).toHaveTextContent("within 30 days of purchase");
+    expect(claims).toHaveTextContent("policy-002 #c01 · p.1");
+    expect(claims).toHaveTextContent("judge confidence 0.90");
   });
 });

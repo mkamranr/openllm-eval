@@ -16,10 +16,15 @@ LOAD_PROFILES: tuple[str, ...] = LoadProfile.__args__  # type: ignore[attr-defin
 
 # Suites that can run in this release, and the milestone that brings the others (spec §17).
 # Performance is measured on every run; quality suites add evaluators on top.
-IMPLEMENTED_SUITES = ("performance", "answer_quality", "structured_output", "tool_calling")
+IMPLEMENTED_SUITES = (
+    "performance",
+    "answer_quality",
+    "structured_output",
+    "tool_calling",
+    "rag",
+    "hallucination",
+)
 PLANNED_SUITES = {
-    "rag": 5,
-    "hallucination": 5,
     "quantization": 7,
     "context_window": 7,
 }

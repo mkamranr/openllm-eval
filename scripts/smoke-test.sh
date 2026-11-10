@@ -163,6 +163,38 @@ if [[ -n "$mock_running" || "${SMOKE_MOCK:-0}" == "1" ]]; then
   printf '%s' "$metrics" | grep -Eq '"metric_name":"quality.contains_reference","aggregation":"pass_rate","metric_value":1(\.0)?,'     && pass "quality: contains_reference pass rate 100% (deterministic evaluator)" || fail "quality.contains_reference metric"
   curl -sS -o /dev/null -X DELETE "$API_URL/api/v1/runs/$run_id"
   curl -sS -o /dev/null -X DELETE "$API_URL/api/v1/datasets/$run_ds_id"
+  # --- RAG + hallucination with the LLM judge (M5): the mock server also answers judge prompts ---
+  rag_file="$(mktemp)"
+  printf '%s\n' '{"id":"k1","type":"rag","input":"When does the office open?","retrieved_contexts":[{"document_id":"kb-1","chunk_id":"c1","text":"The office opens at 9 am on weekdays."}],"reference_answer":"At 9 am on weekdays."}' > "$rag_file"
+  rag_ds="$(curl -sS -X POST "$API_URL/api/v1/datasets" -F "name=smoke-rag-$RANDOM$RANDOM" -F dataset_type=rag \
+    -F "file=@$rag_file;filename=rag.jsonl")"
+  rm -f "$rag_file"
+  rag_ds_id="$(printf '%s' "$rag_ds" | sed -n 's/^{"id":"\([0-9a-f-]*\)".*/\1/p')"
+  [[ -n "$rag_ds_id" ]] || { echo "    response: $rag_ds"; fail "create RAG dataset"; }
+  rag_body="{\"name\":\"smoke-rag\",\"endpoint_ids\":[\"$id\"],\"datasets\":[{\"dataset_id\":\"$rag_ds_id\"}],"
+  rag_body+="\"suites\":[\"performance\",\"rag\",\"hallucination\"],\"load\":{\"profile\":\"smoke\",\"requests\":2,\"concurrency\":1},"
+  rag_body+="\"evaluation\":{\"judge\":{\"endpoint_id\":\"$id\",\"concurrency\":2}}}"
+  rag_run="$(curl -sS -X POST "$API_URL/api/v1/runs" -H 'Content-Type: application/json' -d "$rag_body")"
+  rag_run_id="$(printf '%s' "$rag_run" | sed -n 's/^{"id":"\([0-9a-f-]*\)".*/\1/p')"
+  [[ -n "$rag_run_id" ]] || { echo "    response: $rag_run"; fail "create RAG run (is this an API before M5?)"; }
+  printf '%s' "$rag_run" | grep -q '"evidence_method":"judge"' && pass "RAG run $rag_run_id created with an LLM judge" \
+    || fail "RAG run snapshot does not record the judge"
+  run_id="$rag_run_id"
+  deadline=$((SECONDS + TIMEOUT_SECONDS))
+  status="$(run_status || true)"
+  until [[ "$status" =~ ^(completed|completed_with_errors|cancelled|failed)$ ]]; do
+    (( SECONDS >= deadline )) && fail "RAG run did not finish within ${TIMEOUT_SECONDS}s (status: $status)"
+    sleep 1
+    status="$(run_status || true)"
+  done
+  [[ "$status" == "completed" ]] && pass "RAG run completed (measured, then judged)" || fail "RAG run finished with status $status"
+  rag_metrics="$(curl -fsS "$API_URL/api/v1/runs/$rag_run_id/metrics")"
+  printf '%s' "$rag_metrics" | grep -Eq '"metric_name":"quality.rag_context_relevance","aggregation":"pass_rate","metric_value":1(\.0)?,' \
+    && pass "rag: context relevance 100% (judge verdicts stored)" || fail "quality.rag_context_relevance metric"
+  printf '%s' "$rag_metrics" | grep -q '"metric_name":"hallucination.contradiction_rate"' \
+    && pass "hallucination: claim-level metrics computed" || fail "hallucination.contradiction_rate metric"
+  curl -sS -o /dev/null -X DELETE "$API_URL/api/v1/runs/$rag_run_id"
+  curl -sS -o /dev/null -X DELETE "$API_URL/api/v1/datasets/$rag_ds_id"
   curl -sS -o /dev/null -X DELETE "$API_URL/api/v1/endpoints/$id"
   pass "smoke run, dataset and endpoint removed"
 else

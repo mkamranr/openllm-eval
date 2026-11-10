@@ -16,7 +16,7 @@ from typing import Any
 from app.evaluators.registry import get_evaluator
 from app.metrics.performance import MetricValue
 
-QUALITY_METRICS_VERSION = "1"
+QUALITY_METRICS_VERSION = "2"
 
 
 @dataclass
@@ -214,6 +214,151 @@ def tool_metrics(rows: list[EvalRow]) -> list[MetricValue]:
     return out
 
 
+def _claim_totals(rows: list[EvalRow]) -> tuple[Counter[str], int]:
+    totals: Counter[str] = Counter()
+    answers_with_claims = 0
+    for r in rows:
+        c = (r.metadata or {}).get("claim_counts") or {}
+        if r.status in ("completed", "requires_review") and sum(c.values()):
+            answers_with_claims += 1
+            totals.update({k: int(v or 0) for k, v in c.items()})
+    return totals, answers_with_claims
+
+
+def evidence_metrics(rows: list[EvalRow]) -> list[MetricValue]:
+    """Claim-level (micro) metrics for the RAG and hallucination suites (spec §5.8, §5.9).
+
+    Per-answer scores are averaged in ``quality.<evaluator>``; these pool every claim, so long
+    answers weigh more. Supported, unsupported, contradicted, and unverifiable claims are
+    always counted separately."""
+    out: list[MetricValue] = []
+
+    def add(name: str, num: int, den: int, definition: str, reason: str, **meta: Any) -> None:
+        value, extra = _ratio(num, den, reason)
+        out.append(
+            MetricValue(
+                name,
+                "ratio",
+                value,
+                "ratio",
+                den,
+                {"definition": definition, "numerator": num, "denominator": den, **meta} | extra,
+            )
+        )
+
+    faith = [r for r in rows if r.evaluator == "rag_faithfulness"]
+    if faith:
+        t, answers = _claim_totals(faith)
+        decided = t["supported"] + t["unsupported"] + t["contradicted"]
+        meta = {"claim_counts": dict(t), "answers_with_claims": answers}
+        no_claims = "No answer contained a decidable claim."
+        add(
+            "rag.claim_faithfulness",
+            t["supported"],
+            decided,
+            "Supported claims / (supported + unsupported + contradicted), pooled over answers.",
+            no_claims,
+            **meta,
+        )
+        add(
+            "rag.contradicted_claim_rate",
+            t["contradicted"],
+            sum(t.values()),
+            "Contradicted claims / all extracted claims.",
+            "No claims were extracted.",
+            **meta,
+        )
+
+    support = [r for r in rows if r.evaluator == "claim_support"]
+    if support:
+        t, answers = _claim_totals(support)
+        total = sum(t.values())
+        decided = t["supported"] + t["unsupported"] + t["contradicted"]
+        meta = {"claim_counts": dict(t), "answers_with_claims": answers}
+        none = "No claims were extracted."
+        add(
+            "hallucination.unsupported_claim_rate",
+            t["unsupported"],
+            total,
+            "Claims the supplied evidence does not support / all claims.",
+            none,
+            **meta,
+        )
+        add(
+            "hallucination.contradiction_rate",
+            t["contradicted"],
+            total,
+            "Claims the supplied evidence contradicts / all claims.",
+            none,
+            **meta,
+        )
+        add(
+            "hallucination.unverifiable_claim_rate",
+            t["unverifiable"],
+            total,
+            "Claims that could not be decided and need review / all claims.",
+            none,
+            **meta,
+        )
+        add(
+            "hallucination.claim_support_precision",
+            t["supported"],
+            decided,
+            "Supported claims / decided claims (unverifiable claims excluded).",
+            "No claim could be decided.",
+            **meta,
+        )
+        add(
+            "hallucination.evidence_coverage",
+            t["supported"] + t["contradicted"],
+            total,
+            "Claims the supplied evidence speaks to (supports or contradicts) / all claims.",
+            none,
+            **meta,
+        )
+        completed = [r for r in support if r.status == "completed"]
+        add(
+            "hallucination.answers_with_contradictions",
+            sum(1 for r in completed if (r.metadata.get("claim_counts") or {}).get("contradicted")),
+            len(completed),
+            "Answers with at least one contradicted claim / answers with claims.",
+            "No answer contained claims.",
+        )
+        # Abstention, from the dataset's answerable labels (RAG cases).
+        labeled = [
+            r
+            for r in support
+            if r.status in ("completed", "not_applicable", "requires_review")
+            and "answerable" in (r.metadata or {})
+            and r.metadata.get("abstention") not in (None, "empty")
+        ]
+        unanswerable = [r for r in labeled if not r.metadata["answerable"]]
+        abstained = [r for r in labeled if r.metadata["abstention"] == "abstained"]
+        correct = sum(1 for r in abstained if not r.metadata["answerable"])
+        add(
+            "hallucination.answer_despite_insufficient_evidence",
+            sum(1 for r in unanswerable if r.metadata["abstention"] != "abstained"),
+            len(unanswerable),
+            "Unanswerable cases (answerable: false) that the model answered anyway.",
+            "No case is labeled unanswerable.",
+        )
+        add(
+            "hallucination.abstention_precision",
+            correct,
+            len(abstained),
+            "Abstentions on unanswerable cases / all abstentions.",
+            "The model never abstained.",
+        )
+        add(
+            "hallucination.abstention_recall",
+            correct,
+            len(unanswerable),
+            "Abstentions on unanswerable cases / unanswerable cases.",
+            "No case is labeled unanswerable.",
+        )
+    return out
+
+
 def consistency_metric(hashes_by_case: dict[str, list[str]]) -> MetricValue:
     """Share of repeated cases whose responses were byte-identical every time (spec §5.6)."""
     repeated = {k: v for k, v in hashes_by_case.items() if len(v) > 1}
@@ -258,4 +403,5 @@ def compute(
     ]
     out += evaluator_metrics(rows)
     out += tool_metrics(rows)
+    out += evidence_metrics(rows)
     return out

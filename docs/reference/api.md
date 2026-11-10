@@ -98,13 +98,16 @@ and port 8000.
   "profile_id": null,
   "generation": {"temperature": 0, "max_tokens": 256},
   "load": {"profile": "fixed_concurrency", "requests": 50, "concurrency": 4, "warmup_requests": 2, "stream": true},
-  "evaluation": {"tool_mode": "simulated", "max_tool_rounds": 3, "token_f1_threshold": 0.5, "allow_code_fence": true, "disabled_evaluators": [], "embedding": null}
+  "evaluation": {"tool_mode": "simulated", "max_tool_rounds": 3, "token_f1_threshold": 0.5, "allow_code_fence": true, "disabled_evaluators": [], "embedding": null, "faithfulness_threshold": 0.8, "support_threshold": 0.65, "judge": {"endpoint_id": "<uuid>", "concurrency": 4, "max_tokens": 1024, "temperature": 0}}
 }
 ```
 
-With `profile_id`, any field you leave out is taken from the profile. Suites from later
-milestones, `tool_mode: "integration"`, and datasets without case types for a selected quality
-suite are rejected with a 422.
+Suites: `performance`, `answer_quality`, `structured_output`, `tool_calling`, `rag`, and
+`hallucination`. With `profile_id`, any field you leave out is taken from the profile. Suites
+from later milestones, `tool_mode: "integration"`, datasets without case types for a selected
+quality suite, and a `judge` without the `rag` or `hallucination` suite are rejected with a 422.
+`judge` is optional (`null` by default); the snapshot's `evaluation.judge_endpoint` and
+`evidence_method` record what was used.
 
 ### Metric names
 
@@ -113,6 +116,8 @@ suite are rejected with a 422.
 | Performance | `requests` (`attempted`, `succeeded`), `error_rate`, `ttft_ms`, `latency_ms` (`p50`…`p99`), `inter_token_latency_ms`, `output_tokens_per_second`, `output_token_throughput`, `request_throughput` |
 | `quality.` | `quality.<evaluator>` (`pass_rate`, `mean_score`), `quality.evaluated_requests` (`count`), `quality.output_consistency` |
 | `tool.` | `tool.selection_accuracy`, `tool.argument_exact_match_accuracy`, `tool.call_precision`, `tool.call_recall`, `tool.hallucinated_tool_rate`, … |
+| `rag.` | `rag.claim_faithfulness`, `rag.contradicted_claim_rate` (claims pooled over answers) |
+| `hallucination.` | `hallucination.unsupported_claim_rate`, `contradiction_rate`, `unverifiable_claim_rate`, `claim_support_precision`, `evidence_coverage`, `answers_with_contradictions`, `answer_despite_insufficient_evidence`, `abstention_precision`, `abstention_recall` |
 
 Each metric row has `run_model_id`, `load_step` (null means the whole run), `metric_name`,
 `aggregation`, `metric_value`, `metric_unit`, `sample_count`, and `metadata` (the definition,
@@ -125,7 +130,7 @@ plus the reason when the value is null).
 
 | Event | Data |
 |---|---|
-| `run.progress` | Run status and per-model progress |
+| `run.progress` | Run status and per-model progress (`phase` is `warmup`, `measured`, `judging`, or `done`) |
 | `run.started`, `run.cancel_requested`, `run.completed`, `run.cancelled`, `run.failed` | Status transitions |
 | `case.completed` / `case.failed` | One recorded attempt. `id` is the result sequence |
 | `metric.updated` | Metrics were recomputed |

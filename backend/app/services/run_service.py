@@ -32,8 +32,10 @@ from app.db.models.run import (
     RunDataset,
     RunModel,
 )
+from app.evaluators.judge import JUDGE_PROMPT_VERSION
 from app.evaluators.registry import (
     EVALUATION_FRAMEWORK_VERSION,
+    JUDGE_SUITES,
     QUALITY_SUITES,
     all_evaluators,
     evaluators_for,
@@ -355,6 +357,26 @@ async def create_run(session: AsyncSession, settings: Settings, data: RunCreate)
         if emb is None or not emb.enabled:
             raise _invalid("The embedding endpoint does not exist or is disabled.", "evaluation")
         embedding_snapshot = endpoint_snapshot(emb, LoadConfig(stream=False), GenerationConfig())
+    judge_snapshot = None
+    if data.evaluation.judge is not None:
+        if not set(quality_suites) & set(JUDGE_SUITES):
+            raise _invalid(
+                "The LLM judge is used by the rag and hallucination suites; select one of them "
+                "or remove the judge.",
+                "evaluation",
+            )
+        jc = data.evaluation.judge
+        judge_ep = await session.get(ModelEndpoint, jc.endpoint_id)
+        if judge_ep is None or not judge_ep.enabled:
+            raise _invalid("The judge endpoint does not exist or is disabled.", "evaluation")
+        judge_snapshot = endpoint_snapshot(
+            judge_ep,
+            LoadConfig(stream=False),
+            GenerationConfig(temperature=jc.temperature, max_tokens=jc.max_tokens),
+        )
+        judge_snapshot["judges_tested_model"] = str(judge_ep.id) in {
+            str(e) for e in data.endpoint_ids
+        }
     try:
         load = resolve_load(
             data.load,
@@ -380,7 +402,9 @@ async def create_run(session: AsyncSession, settings: Settings, data: RunCreate)
         "load": load,
         "datasets": dataset_snaps,
         "endpoints": ep_snaps,
-        "evaluation": evaluation_snapshot(quality_suites, data.evaluation, embedding_snapshot),
+        "evaluation": evaluation_snapshot(
+            quality_suites, data.evaluation, embedding_snapshot, judge_snapshot
+        ),
         "profile": {"id": str(profile.id), "name": profile.name} if profile else None,
         "created_at": utcnow().isoformat(),
     }
@@ -422,10 +446,13 @@ async def create_run(session: AsyncSession, settings: Settings, data: RunCreate)
 
 
 def evaluation_snapshot(
-    suites: list[str], config: EvaluationConfig, embedding_endpoint: dict[str, Any] | None
+    suites: list[str],
+    config: EvaluationConfig,
+    embedding_endpoint: dict[str, Any] | None,
+    judge_endpoint: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """What evaluates this run, frozen at creation: evaluator names and versions, settings,
-    and the (secret-free) embedding endpoint."""
+    and the (secret-free) embedding and judge endpoints."""
     cfg = config.model_dump(mode="json")
     if not suites:
         return {"suites": [], "evaluators": [], "config": cfg}
@@ -446,6 +473,11 @@ def evaluation_snapshot(
             else None
         ),
         "embedding_endpoint": embedding_endpoint,
+        "judge_endpoint": judge_endpoint,
+        "judge_prompt_version": JUDGE_PROMPT_VERSION if judge_endpoint else None,
+        "evidence_method": (
+            ("judge" if judge_endpoint else "lexical") if set(suites) & set(JUDGE_SUITES) else None
+        ),
     }
 
 

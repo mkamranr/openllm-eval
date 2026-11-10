@@ -34,7 +34,7 @@ or `http://localhost:8000`. Most commands also accept `--json` for machine-reada
 |---|---|
 | `openllm-eval run create --config run.yaml [--wait]` | Create a run. `--wait` follows progress until it finishes |
 | `openllm-eval run status <run-id> [--watch]` | Status and progress |
-| `openllm-eval run results <run-id>` | Performance and quality metrics per model |
+| `openllm-eval run results <run-id>` | Performance, quality, tool, RAG, and hallucination metrics per model |
 | `openllm-eval run list [--limit 20]` | Recent runs |
 | `openllm-eval run cancel <run-id>` | Request cancellation |
 
@@ -53,7 +53,7 @@ dataset:                           # one dataset…
 # datasets: [...]                  # …or a list of the same objects
 
 evaluation:
-  suites: [performance, answer_quality, structured_output, tool_calling]
+  suites: [performance, answer_quality, structured_output, tool_calling, rag, hallucination]
   tool_mode: simulated             # or generation_only. Tools are never executed
   max_tool_rounds: 3               # 1-5
   token_f1_threshold: 0.5
@@ -62,6 +62,13 @@ evaluation:
   embedding:                       # optional embedding similarity
     endpoint: local-embeddings     # endpoint name or id; it must serve /embeddings
     threshold: 0.8
+  faithfulness_threshold: 0.8      # rag / hallucination
+  support_threshold: 0.65          # lexical claim checks
+  judge:                           # optional LLM judge for rag / hallucination (opt-in)
+    endpoint: judge-70b            # endpoint name or id; case content is sent to it
+    concurrency: 4                 # judge requests in flight, after each model is measured
+    max_tokens: 1024
+    temperature: 0
 
 generation:
   temperature: 0

@@ -465,10 +465,12 @@ def build_run_payload(base: str, config: dict[str, Any], config_dir: Path) -> di
         typer.echo("note: report generation arrives in Milestone 6; 'report' is ignored", err=True)
     evaluation = dict(config.get("evaluation") or {})
     suites = evaluation.pop("suites", None)
-    embedding = evaluation.get("embedding")
-    if isinstance(embedding, dict) and embedding.get("endpoint"):
-        ref = str(embedding.pop("endpoint"))
-        embedding["endpoint_id"] = _resolve_by_name(base, "endpoints", ref)["id"]
+    # The embedding endpoint and the LLM judge are named by endpoint name or id.
+    for key in ("embedding", "judge"):
+        block = evaluation.get(key)
+        if isinstance(block, dict) and block.get("endpoint"):
+            ref = str(block.pop("endpoint"))
+            block["endpoint_id"] = _resolve_by_name(base, "endpoints", ref)["id"]
     payload: dict[str, Any] = {
         "name": config.get("name") or "benchmark",
         "description": config.get("description"),
@@ -557,7 +559,11 @@ def _print_metrics(base: str, run: dict[str, Any]) -> None:
         )
     typer.echo("times in ms; n/a = not measurable (the API metadata says why)")
     quality = {
-        mid: {k: val for k, val in vals.items() if k[0].startswith(("quality.", "tool."))}
+        mid: {
+            k: val
+            for k, val in vals.items()
+            if k[0].startswith(("quality.", "tool.", "rag.", "hallucination."))
+        }
         for mid, vals in table.items()
     }
     if any(quality.values()):

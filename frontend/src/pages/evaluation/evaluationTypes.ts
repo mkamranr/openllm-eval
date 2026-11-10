@@ -70,7 +70,7 @@ export const EVALUATION_TYPES: EvaluationType[] = [
     description: "Unsupported and contradicted claims relative to the evidence.",
     icon: Brain,
     milestone: 5,
-    datasetTypes: ["rag", "qa"],
+    datasetTypes: ["rag", "long_context"],
   },
   {
     key: "quantization",
@@ -93,4 +93,11 @@ export const EVALUATION_TYPES: EvaluationType[] = [
 export const evaluationType = (key: string) => EVALUATION_TYPES.find((t) => t.key === key);
 
 /** Evaluation types the backend can run today (must match IMPLEMENTED_SUITES in schemas/run.py). */
-export const IMPLEMENTED_TYPES = ["performance", "answer_quality", "structured_output", "tool_calling"];
+export const IMPLEMENTED_TYPES = [
+  "performance",
+  "answer_quality",
+  "structured_output",
+  "tool_calling",
+  "rag",
+  "hallucination",
+];

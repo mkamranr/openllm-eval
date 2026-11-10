@@ -240,6 +240,8 @@ class RetrievedContext(BaseModel):
     chunk_id: str | None = None
     source: str | None = None
     page: int | None = Field(default=None, ge=0)
+    # Optional relevance label for context precision (spec §5.8).
+    relevant: bool | None = None
 
 
 class ExpectedCitation(BaseModel):
