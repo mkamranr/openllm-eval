@@ -161,6 +161,36 @@ wizard, through the API, or reference one by name in a CLI config (`profile: nig
 A run copies the profile's settings when it is created, so editing a profile never changes past
 runs.
 
+## 8. Reports and comparison
+
+On a finished run's page, the **Reports** card generates:
+
+- **HTML report**: a single file with charts, every metric, failures, the configuration, the
+  methodology, and how to reproduce the run. It has no scripts and loads nothing, so you can
+  archive it or email it and open it offline.
+- **JSON export** (everything in the report), **results CSV** (one row per attempt), **metrics
+  CSV**, and a **Markdown summary**.
+
+Turn on **Leave out generated text** or **Hide endpoint URLs** before sharing a report outside
+your team. All reports are listed under **Reports**.
+
+**Compare** on a run page (or **Compare Runs** in the sidebar) puts models of several runs side by
+side against a baseline. Start by reading the comparability label:
+
+- **Equivalent configuration**: same datasets, versions, and settings. Differences come from the
+  models (or from the server between runs).
+- **Partially controlled**: generation or load settings differ; deltas mix model and setting.
+- **Not directly comparable**: datasets or evaluation methods differ, so the numbers measure
+  different things.
+
+Each difference is listed, and **Per-case changes** shows which cases went from pass to fail.
+There is no significance test, so treat small differences on small datasets with care. **Re-run**
+repeats a run with the same configuration, which is the easiest way to check how much results vary
+from run to run.
+
+From the CLI: `openllm-eval report generate <run-id> -f html` and
+`openllm-eval compare <run-a> <run-b>`.
+
 ## Next steps
 
 - Automate runs with the [CLI](../reference/cli.md).

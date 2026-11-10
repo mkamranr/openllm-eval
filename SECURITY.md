@@ -6,7 +6,7 @@ Please report vulnerabilities privately. Use GitHub's "Report a vulnerability" (
 advisory) on this repository rather than opening a public issue. Include steps to reproduce,
 affected versions, and the impact. We aim to acknowledge reports within 5 business days.
 
-## Current security posture (Milestone 5)
+## Current security posture (Milestone 6)
 
 - **No authentication yet.** By default, Compose binds published ports to `127.0.0.1`. If you set
   `BIND_ADDRESS=0.0.0.0`, the UI and API are reachable by anyone who can reach the host. Do this
@@ -109,6 +109,21 @@ endpoints and trigger requests within this policy.
   is checked against the named passage. These measures reduce, but cannot rule out, a judge
   being manipulated by adversarial dataset or answer text, so verdicts keep their rationale for
   review.
+
+### Reports
+
+- HTML reports contain no scripts and load no external resources. Every value from the database
+  (model output, dataset text, run names, error messages) is HTML-escaped.
+- Report downloads are served with `Content-Security-Policy: default-src 'none';
+  style-src 'unsafe-inline'; img-src data:; sandbox`, `X-Content-Type-Options: nosniff`, and
+  `Cache-Control: no-store`. Even if escaping failed, the browser would run nothing.
+- CSV cells that start with `=`, `+`, `-`, `@`, tab, or carriage return are prefixed with `'`, so
+  spreadsheets don't evaluate them as formulas.
+- Reports contain generated text and endpoint URLs unless they are generated with
+  `redact_content` / `redact_endpoints`. API keys are never included; snapshots only ever hold
+  a secret reference name.
+- Reports are stored in the database, readable by anyone who can reach the API (no
+  authentication yet). They are deleted with their run.
 
 ### Planned
 

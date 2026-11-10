@@ -36,8 +36,9 @@ produced it. Everything runs on your own infrastructure: no telemetry, no CDN, n
 | **RAG and hallucination** | Faithfulness, citation precision and recall, context relevance, precision and recall, and abstention on unanswerable questions. Every claim is classified as supported, unsupported, contradicted, or unverifiable, with its evidence and source. Lexical by default; an LLM judge is optional. |
 | **Tool calling** | Tool selection measured separately from argument correctness; call precision and recall; invented-tool and malformed-argument rates; and **simulated** tool results from dataset fixtures, so final answers can be checked without executing anything. |
 | **Runs** | A background worker with a database-backed queue and leases, live progress over SSE, cancel and retry-failed, and an immutable, secret-free configuration snapshot for every run. |
+| **Reports and comparison** | An offline HTML report (charts, every metric, failures, configuration, methodology, reproduction steps), JSON, CSV, and Markdown exports, and side-by-side run comparison that flags every configuration difference, labels comparability, and lists per-case regressions. One-click re-run. |
 | **Profiles** | Reusable evaluation settings, available from the UI, the API, and the CLI. |
-| **Interfaces** | A web UI (dashboard, New Evaluation wizard, run explorer), a REST API with OpenAPI, and the `openllm-eval` CLI with YAML run configs. |
+| **Interfaces** | A web UI (dashboard, New Evaluation wizard, run explorer, reports, comparison), a REST API with OpenAPI, and the `openllm-eval` CLI with YAML run configs. |
 
 Missing measurements are always reported as unavailable, with a reason, and never as `0`.
 
@@ -128,7 +129,7 @@ and served by nginx. See the [architecture overview](docs/architecture/overview.
 - [x] **M3** Run engine and performance metrics
 - [x] **M4** Deterministic evaluators, tool calling, evaluation profiles
 - [x] **M5** RAG and evidence evaluation, optional LLM judge, hallucination indicators
-- [ ] **M6** Run comparison and reports
+- [x] **M6** Run comparison, reports, and exports
 - [ ] **M7** Quantization and context-window studies
 
 See the [CHANGELOG](CHANGELOG.md) for details.

@@ -4,7 +4,9 @@ import {
   BarChart3,
   CheckCircle2,
   Clock,
+  Copy,
   Gauge,
+  GitCompare,
   ListChecks,
   RotateCcw,
   Settings2,
@@ -61,6 +63,7 @@ import {
   metricTitle,
   progressOf,
 } from "./runMeta";
+import { ReportsCard } from "./ReportsCard";
 import { ProgressBar } from "./RunsPage";
 
 const PAGE_SIZE = 25;
@@ -284,14 +287,16 @@ type ResultTab = "all" | "failed" | "quality" | "warmup";
 function ResultsBrowser({ run, version }: { run: RunDetail; version: number }) {
   const [tab, setTab] = useState<ResultTab>("all");
   const [model, setModel] = useState("");
+  const [evaluator, setEvaluator] = useState("");
   const [q, setQ] = useState("");
   const [offset, setOffset] = useState(0);
   const [page, setPage] = useState<Page<CaseResult>>();
   const [error, setError] = useState<string>();
   const [open, setOpen] = useState<CaseResult | CaseResultDetail | null>(null);
   const quality = (run.configuration_snapshot.evaluation?.suites.length ?? 0) > 0;
+  const evaluators = (run.configuration_snapshot.evaluation?.evaluators ?? []).map((e) => e.name);
 
-  useEffect(() => setOffset(0), [tab, model, q]);
+  useEffect(() => setOffset(0), [tab, model, q, evaluator]);
   useEffect(() => {
     let cancelled = false;
     api.runs
@@ -299,6 +304,7 @@ function ResultsBrowser({ run, version }: { run: RunDetail; version: number }) {
         status: tab === "failed" ? "failed" : undefined,
         phase: tab === "warmup" ? "warmup" : tab === "quality" ? "measured" : undefined,
         evaluation: tab === "quality" ? "failed" : undefined,
+        evaluator: tab === "quality" && evaluator ? evaluator : undefined,
         run_model_id: model || undefined,
         q: q.trim() || undefined,
         limit: PAGE_SIZE,
@@ -309,7 +315,7 @@ function ResultsBrowser({ run, version }: { run: RunDetail; version: number }) {
     return () => {
       cancelled = true;
     };
-  }, [run.id, tab, model, q, offset, version]);
+  }, [run.id, tab, model, q, evaluator, offset, version]);
 
   async function openResult(r: CaseResult) {
     setOpen(r);
@@ -337,6 +343,12 @@ function ResultsBrowser({ run, version }: { run: RunDetail; version: number }) {
             <select className="input" aria-label="Filter by model" value={model} onChange={(e) => setModel(e.target.value)} style={{ maxWidth: 260 }}>
               <option value="">All models</option>
               {run.models.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+            </select>
+          )}
+          {tab === "quality" && evaluators.length > 0 && (
+            <select className="input" aria-label="Filter by evaluator" value={evaluator} onChange={(e) => setEvaluator(e.target.value)} style={{ maxWidth: 260 }}>
+              <option value="">All evaluators</option>
+              {evaluators.map((name) => <option key={name} value={name}>{name}</option>)}
             </select>
           )}
           <input className="input" type="search" placeholder="Case id or error type" aria-label="Search results"
@@ -613,6 +625,18 @@ export function RunDetailPage() {
     }
   }
 
+  async function rerun() {
+    setBusy(true);
+    try {
+      const created = await api.runs.rerun(runId);
+      navigate(`/runs/${created.id}`);
+    } catch (err) {
+      setNotice({ tone: "error", text: err instanceof Error ? err.message : String(err) });
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function remove() {
     setBusy(true);
     try {
@@ -677,6 +701,17 @@ export function RunDetailPage() {
                 onClick={() => void act(() => api.runs.retryFailed(runId), "Queued: failed and unfinished requests will be retried.")}>
                 <RotateCcw size={16} /> Retry failed
               </button>
+            )}
+            {isTerminal(run.status) && (
+              <>
+                <Link className="btn" to={`/compare?runs=${run.id}`}>
+                  <GitCompare size={16} /> Compare
+                </Link>
+                <button type="button" className="btn" disabled={busy} onClick={() => void rerun()}
+                  title="Create a new run with the same endpoints, dataset versions, and settings">
+                  <Copy size={16} /> Re-run
+                </button>
+              </>
             )}
             {!canCancel && (
               <button type="button" className="btn btn-danger-ghost" disabled={busy} onClick={() => setConfirmDelete(true)}
@@ -790,6 +825,8 @@ export function RunDetailPage() {
       <Card title="Results" icon={ListChecks}>
         <ResultsBrowser run={run} version={resultsVersion} />
       </Card>
+
+      <ReportsCard run={run} />
 
       <ConfigurationCard run={run} />
 

@@ -4,6 +4,7 @@ from app.db.models.dataset import Dataset, DatasetCase, DatasetVersion
 from app.db.models.endpoint import ModelEndpoint
 from app.db.models.evaluation import EvaluationProfile, EvaluationResult
 from app.db.models.project import Project
+from app.db.models.report import Comparison, Report
 from app.db.models.run import (
     BenchmarkRun,
     RunAggregateMetric,
@@ -14,6 +15,7 @@ from app.db.models.run import (
 
 __all__ = [
     "BenchmarkRun",
+    "Comparison",
     "Dataset",
     "DatasetCase",
     "DatasetVersion",
@@ -21,6 +23,7 @@ __all__ = [
     "EvaluationResult",
     "ModelEndpoint",
     "Project",
+    "Report",
     "RunAggregateMetric",
     "RunCaseResult",
     "RunDataset",

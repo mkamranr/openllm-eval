@@ -34,12 +34,12 @@ describe("App shell", () => {
   it("routes unfinished features to placeholders", () => {
     vi.stubGlobal("fetch", vi.fn(() => new Promise(() => {})));
     render(
-      <MemoryRouter future={ROUTER_FUTURE} initialEntries={["/compare"]}>
+      <MemoryRouter future={ROUTER_FUTURE} initialEntries={["/settings"]}>
         <App />
       </MemoryRouter>,
     );
-    expect(screen.getByRole("heading", { level: 1, name: "Compare Runs" })).toBeInTheDocument();
-    expect(screen.getByText(/Milestone 6/)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 1, name: "Settings" })).toBeInTheDocument();
+    expect(screen.getByText(/later milestone/)).toBeInTheDocument();
   });
 
   it("routes /runs to the runs list", () => {

@@ -62,6 +62,7 @@ When the backend runs locally with `uv run`, it reads `backend/.env`.
 | `RUN_MAX_ENDPOINTS` | `10` | Models per run |
 | `RUN_STORE_RESPONSES` | `true` | Store generated text with the results. When `false`, only timings and token counts are stored |
 | `RUN_RESPONSE_MAX_CHARS` | `20000` | Stored text is truncated to this length. Evaluation always uses the full response |
+| `REPORT_MAX_RESULTS` | `50000` | Recorded attempts included in a report or export; metrics and charts always cover the whole run |
 | `RUN_LEASE_SECONDS` | `30` | Worker lease. A crashed worker's run is resumed after it expires |
 | `RUN_PROGRESS_INTERVAL_SECONDS` | `1` | How often results are written and progress is published |
 | `WORKER_POLL_INTERVAL_SECONDS` | `1` | Queue poll interval (Redis wake-ups make it faster) |

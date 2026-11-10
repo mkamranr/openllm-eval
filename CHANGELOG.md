@@ -6,6 +6,57 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added — Milestone 6 (reports and comparison)
+- Reports for finished runs, in five formats: a self-contained **HTML report** (no scripts and
+  no external resources, so it works offline; light and dark themes), a **JSON export** (all
+  the data behind the report), a **results CSV** (one row per recorded attempt), a **metrics
+  CSV**, and a **Markdown summary**. Reports are stored in the database as immutable
+  snapshots, with their sha256 and options (`reports` table, migration `0006`).
+- The HTML report contains warnings, a per-model summary, charts, every metric (with the reason
+  where a value is unavailable), failed requests and failed quality checks, the configuration
+  (models, effective generation settings, declared model and hardware metadata, dataset
+  versions and hashes, load, evaluators and versions), the methodology (warm-up exclusion,
+  outcome and error-rate rules, the percentile method, throughput window, token-count sources,
+  metric and evaluator versions), and how to reproduce the run (CLI YAML and API body).
+- Charts are server-rendered inline SVG with native tooltips: latency, TTFT, and output tokens/s
+  histograms (one panel per model), throughput and error rate over time, quality pass rate by
+  evaluator, quality vs latency and quality vs throughput (model-labeled points), and input
+  size vs latency. Missing values are never drawn as zero.
+- Options `redact_content` (leave out generated text, error messages, rationales, and claim
+  evidence) and `redact_endpoints` (replace endpoint URLs). Reports cover up to
+  `REPORT_MAX_RESULTS` attempts (default 50000) and say when they are truncated.
+- **Run comparison**: the models of up to 10 runs side by side against a baseline. Each metric
+  shows its delta and relative change and whether that is better or worse for that metric.
+  Every configuration difference is listed with a severity, and the result is labeled
+  `equivalent_configuration`, `partially_controlled`, or `not_directly_comparable` — overall,
+  for performance, and for quality. Critical: dataset content, prompt-builder, metric,
+  evaluator, judge, and evaluation settings. Major: generation (temperature, top_p, max_tokens,
+  seed), load profile, concurrency, request count, streaming. Minor: warm-up, timeout, retries,
+  suites. Expected differences between the models themselves are shown but don't lower the label.
+- Per-case changes against the baseline: pass→fail and fail→pass per evaluator, and new and fixed
+  request errors, using the first measured request of each case.
+- Comparisons can be saved (`comparisons` table) and exported as HTML, CSV, or JSON. A saved
+  comparison is recomputed when read, and reports when a compared run has been deleted.
+- **Re-run**: `POST /runs/{id}/rerun` creates a run with the same endpoints, dataset versions,
+  suites, evaluation, generation, and load settings.
+- API: `POST/GET /runs/{id}/reports`, `GET /reports`, `GET/DELETE /reports/{id}`,
+  `GET /reports/{id}/download`, `GET /compare`, `GET /compare/export`, `POST/GET /comparisons`,
+  `GET/DELETE /comparisons/{id}`, `GET /comparisons/{id}/export`, `POST /runs/{id}/rerun`.
+- CLI: `report generate`, `report list`, `report download`, `compare` (also `run compare`), and
+  `run rerun`. `run create --wait` now saves the formats listed under `report.formats` in the config
+  (`--report-dir`).
+- UI: a Reports card on the run page (format, redaction options, open, download, delete),
+  **Compare** and **Re-run** buttons, a Reports page, and a Compare Runs page (run picker,
+  baseline, comparability badges, differences, metric deltas by family, per-case changes,
+  export, saved comparisons). The quality-failures view filters by evaluator.
+
+### Security — Milestone 6
+- Report downloads are served with `Content-Security-Policy: default-src 'none';
+  style-src 'unsafe-inline'; img-src data:; sandbox`, `nosniff`, and `no-store`. Every value
+  in HTML reports is escaped, and CSV cells that start with a formula character are prefixed
+  with `'`.
+- nginx no longer adds its UI policy to `/api/` responses, so a report gets one policy, not two.
+
 ### Added — Milestone 5 (RAG and evidence evaluation)
 - Two new suites, `rag` (rag cases) and `hallucination` (rag and long_context cases). They read
   only the evidence supplied with each case: the retrieved contexts, or the paragraphs of a

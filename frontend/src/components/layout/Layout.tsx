@@ -36,8 +36,8 @@ export const NAV_SECTIONS: { title: string; items: NavItem[] }[] = [
     title: "Evaluate",
     items: [
       { to: "/runs", label: "Benchmark Runs", icon: BarChart3 },
-      { to: "/compare", label: "Compare Runs", icon: GitCompare, soon: "M6" },
-      { to: "/reports", label: "Reports", icon: FileText, soon: "M6" },
+      { to: "/compare", label: "Compare Runs", icon: GitCompare },
+      { to: "/reports", label: "Reports", icon: FileText },
     ],
   },
   {

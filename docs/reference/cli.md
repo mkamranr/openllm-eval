@@ -37,6 +37,16 @@ or `http://localhost:8000`. Most commands also accept `--json` for machine-reada
 | `openllm-eval run results <run-id>` | Performance, quality, tool, RAG, and hallucination metrics per model |
 | `openllm-eval run list [--limit 20]` | Recent runs |
 | `openllm-eval run cancel <run-id>` | Request cancellation |
+| `openllm-eval run rerun <run-id> [--wait]` | New run with the same configuration |
+| `openllm-eval compare <run-id> <run-id>… [--baseline <run-id>] [--json] [-o file.html\|.csv\|.json]` | Compare runs: comparability, configuration differences, key metrics with relative change, per-case regressions. Also `run compare` |
+
+## Reports
+
+| Command | Description |
+|---|---|
+| `openllm-eval report generate <run-id> [-f html\|json\|csv\|metrics_csv\|markdown] [-o path] [--redact-content] [--redact-endpoints]` | Generate a report for a finished run and save it (to a file, or into a directory under its own name) |
+| `openllm-eval report list [--run <run-id>]` | Generated reports |
+| `openllm-eval report download <report-id> [-o path]` | Download an earlier report |
 
 ## Run config (YAML)
 
@@ -86,6 +96,9 @@ load:
   max_retries: 1
   # ramp:      ramp_concurrency: [1, 2, 4, 8]   requests_per_step: 20
   # sustained: duration_seconds: 300
+
+report:                            # saved after the run with --wait (into --report-dir)
+  formats: [html, json, csv]       # html | json | csv | metrics_csv | markdown
 ```
 
 When a `profile` is given, only the keys you set here override it. Values that a profile or the

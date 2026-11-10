@@ -102,6 +102,8 @@ class Settings(BaseSettings):
     # Privacy (spec §8.2): store generated text with results, truncated to this many characters.
     run_store_responses: bool = True
     run_response_max_chars: int = Field(default=20_000, ge=0)
+    # Reports: at most this many recorded attempts are included in a report or export.
+    report_max_results: int = Field(default=50_000, ge=1, le=1_000_000)
 
     @field_validator("database_url")
     @classmethod

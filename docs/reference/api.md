@@ -86,6 +86,39 @@ and port 8000.
 | GET | `/runs/{id}/results` | Attempts. Filters: `run_model_id`, `status`, `phase`, `final_only`, `q`, `evaluator`, `evaluation` (`passed`, `failed`, `not_applicable`, `skipped`, `requires_review`) |
 | GET | `/runs/{id}/results/{result_id}` | One attempt with the full response and all evaluations |
 | GET | `/runs/{id}/events` | Server-Sent Events (below) |
+| POST | `/runs/{id}/rerun` | Create a new run with the same configuration (endpoints, dataset versions, suites, evaluation, generation, load) |
+
+## Reports
+
+| Method | Path | Description |
+|---|---|---|
+| POST | `/runs/{id}/reports` | Generate a report for a finished run (409 otherwise). Body: `{"format": "html" \| "json" \| "csv" \| "metrics_csv" \| "markdown", "redact_content": false, "redact_endpoints": false}` |
+| GET | `/runs/{id}/reports` | Reports of one run |
+| GET | `/reports` | All reports, newest first (`run_id`, `limit`, `offset`) |
+| GET / DELETE | `/reports/{id}` | Report metadata (filename, size, sha256, options, result counts), or delete it |
+| GET | `/reports/{id}/download` | The file (`inline=true` to view in the browser). Served with a restrictive CSP |
+
+A report is generated once and stored; it doesn't change if the run is later retried. The JSON
+export holds everything the other formats are rendered from: run, configuration snapshot,
+models, datasets, metrics, results (with evaluations), chart series, failures, warnings, and
+reproduction instructions.
+
+## Comparison
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/compare?run_ids=a,b[&baseline=]` | Compare without saving. `baseline` is a run id (its first model) or a run-model id; default: the first run's first model |
+| GET | `/compare/export?run_ids=…&format=html\|csv\|json` | Download a comparison |
+| POST | `/comparisons` | Save: `{"name", "description", "project_id", "run_ids", "baseline"}`. Returns the computed result |
+| GET | `/comparisons` | Saved comparisons (`project_id`) |
+| GET / DELETE | `/comparisons/{id}` | Saved comparison, recomputed on read (`result`), or `error` if a run was deleted |
+| GET | `/comparisons/{id}/export?format=` | Download a saved comparison |
+
+The result lists `subjects` (one per model of each run), `comparability` (`overall`,
+`performance`, `quality`, and `differences` with `severity` critical / major / minor / info),
+`metrics` (per subject: `value`, `delta`, `relative_change` (null when the baseline is 0 or
+missing), `improved`, `unavailable_reason`), `transitions` (per evaluator: pass→fail and
+fail→pass cases; new and fixed errors; lists capped at 200, totals exact), and `notes`.
 
 ### Create a run
 

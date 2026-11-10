@@ -580,3 +580,7 @@ textarea.code, .code-block { font-family: ui-monospace, SFMono-Regular, Menlo, C
 .eval-score { display: inline-flex; gap: 8px; align-items: center; }
 .checkbox-row { display: flex; flex-wrap: wrap; gap: 8px 16px; }
 .checkbox-row label { display: inline-flex; gap: 6px; align-items: center; font-size: 0.875rem; }
+
+/* Compare and reports (M6) */
+.legend-key { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+.plain-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }

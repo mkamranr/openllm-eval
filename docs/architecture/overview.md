@@ -85,7 +85,21 @@ backend/app/
   cli/main.py             `openllm-eval` CLI (typer)
 ```
 
-Later milestones add `reporting/` (M6).
+```
+backend/app/reporting/    (Milestone 6)
+  data.py                 collect(): one run's data as plain JSON (the JSON export), rerun request
+  charts.py               inline SVG charts (histograms, lines, grouped bars, scatter), no JS
+  html.py                 self-contained HTML report; everything escaped
+  exports.py              results CSV, metrics CSV, Markdown, format registry
+  catalog.py              metric families and better-direction
+  compare.py              comparison: config fingerprints, severities, labels, deltas, transitions
+  compare_html.py         HTML export of a comparison
+api/routes/reports.py     reports, comparisons, compare, rerun
+services/report_service.py
+```
+
+Reports read only from the collected JSON, so every number in the HTML, CSV, or Markdown can be
+traced to the JSON export.
 
 With an LLM judge configured, the RAG and hallucination evaluators do not run inline. Each
 model's answers are kept in memory and judged after the model's measured phase (phase

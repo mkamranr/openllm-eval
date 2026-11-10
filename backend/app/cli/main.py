@@ -461,8 +461,6 @@ def build_run_payload(base: str, config: dict[str, Any], config_dir: Path) -> di
     load = dict(config.get("load") or {})
     if "stream" in generation:  # the spec's example puts stream under generation
         load.setdefault("stream", generation.pop("stream"))
-    if config.get("report"):
-        typer.echo("note: report generation arrives in Milestone 6; 'report' is ignored", err=True)
     evaluation = dict(config.get("evaluation") or {})
     suites = evaluation.pop("suites", None)
     # The embedding endpoint and the LLM judge are named by endpoint name or id.
@@ -588,6 +586,9 @@ def run_create(
     wait: bool = typer.Option(False, "--wait", help="Follow progress until the run finishes."),
     interval: float = typer.Option(2.0, help="Polling interval with --wait (seconds)."),
     as_json: bool = typer.Option(False, "--json", help="Print the run as JSON."),
+    report_dir: Path = typer.Option(
+        Path("."), "--report-dir", help="Where report.formats from the config are saved (--wait)."
+    ),
     api_url: str = typer.Option(None, "--api-url", help=API_URL_HELP),
 ) -> None:
     """Create a run from a YAML config. With --wait, exit 0 only if it completes cleanly."""
@@ -617,6 +618,8 @@ def run_create(
         raise typer.Exit(code=1)
     run_id = body["id"]
     if not wait:
+        if data.get("report"):
+            typer.echo("note: 'report' in the config is generated with --wait only", err=True)
         typer.echo(json.dumps(body, indent=2) if as_json else f"created run {run_id}")
         return
     typer.echo(f"created run {run_id}", err=True)
@@ -625,6 +628,10 @@ def run_create(
         typer.echo(json.dumps(run, indent=2))
     else:
         _print_metrics(base, run)
+    report_cfg = data.get("report") or {}
+    for fmt in (report_cfg.get("formats") or []) if isinstance(report_cfg, dict) else []:
+        path = _generate_report(base, run_id, str(fmt), report_dir, False, False)
+        typer.echo(f"saved {fmt} report to {path}", err=True)
     _exit_for(run["status"])
 
 
@@ -694,6 +701,221 @@ def run_cancel(
     """Request cancellation of a run."""
     run = _request("POST", f"{_base(api_url)}/api/v1/runs/{run_id}/cancel")
     typer.echo(f"{run['id']}: {run['status']}")
+
+
+REPORT_FORMATS = ("html", "json", "csv", "metrics_csv", "markdown")
+
+
+def _download_bytes(url: str, **params: Any) -> bytes:
+    try:
+        response = httpx.get(url, params=params, timeout=120.0)
+    except httpx.HTTPError as exc:
+        typer.echo(f"error: could not reach API: {type(exc).__name__}", err=True)
+        raise typer.Exit(code=2) from exc
+    if response.status_code >= 400:
+        try:
+            message = response.json().get("error", {}).get("message")
+        except ValueError:
+            message = None
+        typer.echo(f"error: {message or response.status_code}", err=True)
+        raise typer.Exit(code=1)
+    return response.content
+
+
+def _generate_report(
+    base: str, run_id: str, fmt: str, out: Path, redact_content: bool, redact_endpoints: bool
+) -> Path:
+    if fmt not in REPORT_FORMATS:
+        typer.echo(f"error: unknown report format '{fmt}' ({', '.join(REPORT_FORMATS)})", err=True)
+        raise typer.Exit(code=1)
+    report = _request(
+        "POST",
+        f"{base}/api/v1/runs/{run_id}/reports",
+        timeout=300.0,
+        json={
+            "format": fmt,
+            "redact_content": redact_content,
+            "redact_endpoints": redact_endpoints,
+        },
+    )
+    content = _download_bytes(f"{base}/api/v1/reports/{report['id']}/download")
+    target = out / report["filename"] if out.is_dir() else out
+    target.write_bytes(content)
+    return target
+
+
+report_app = typer.Typer(help="Generate and download run reports.", no_args_is_help=True)
+app.add_typer(report_app, name="report")
+
+
+@report_app.command("generate")
+def report_generate(
+    run_id: str = typer.Argument(...),
+    fmt: str = typer.Option("html", "--format", "-f", help=", ".join(REPORT_FORMATS)),
+    output: Path = typer.Option(Path("."), "--output", "-o", help="File or directory."),
+    redact_content: bool = typer.Option(
+        False, "--redact-content", help="Leave out generated text, error messages, rationales."
+    ),
+    redact_endpoints: bool = typer.Option(
+        False, "--redact-endpoints", help="Replace endpoint URLs with [redacted]."
+    ),
+    api_url: str = typer.Option(None, "--api-url", help=API_URL_HELP),
+) -> None:
+    """Generate a report for a finished run and save it."""
+    path = _generate_report(_base(api_url), run_id, fmt, output, redact_content, redact_endpoints)
+    typer.echo(str(path))
+
+
+@report_app.command("list")
+def report_list(
+    run_id: str = typer.Option(None, "--run", help="Only reports of this run."),
+    as_json: bool = typer.Option(False, "--json"),
+    api_url: str = typer.Option(None, "--api-url", help=API_URL_HELP),
+) -> None:
+    """List generated reports."""
+    params: dict[str, Any] = {"limit": 100}
+    if run_id:
+        params["run_id"] = run_id
+    page = _request("GET", f"{_base(api_url)}/api/v1/reports", params=params)
+    if as_json:
+        typer.echo(json.dumps(page["items"], indent=2))
+        return
+    for r in page["items"]:
+        typer.echo(
+            f"{r['id']}  {r['report_type']:<11} {r['size_bytes']:>9} B  "
+            f"{r['generated_at'][:19]}  {(r.get('run_name') or '')[:30]}"
+        )
+
+
+@report_app.command("download")
+def report_download(
+    report_id: str = typer.Argument(...),
+    output: Path = typer.Option(Path("."), "--output", "-o", help="File or directory."),
+    api_url: str = typer.Option(None, "--api-url", help=API_URL_HELP),
+) -> None:
+    """Download a previously generated report."""
+    base = _base(api_url)
+    report = _request("GET", f"{base}/api/v1/reports/{report_id}")
+    content = _download_bytes(f"{base}/api/v1/reports/{report_id}/download")
+    target = output / report["filename"] if output.is_dir() else output
+    target.write_bytes(content)
+    typer.echo(str(target))
+
+
+LABELS = {
+    "equivalent_configuration": "equivalent configuration",
+    "partially_controlled": "partially controlled",
+    "not_directly_comparable": "NOT directly comparable",
+}
+COMPARE_SUMMARY = [
+    ("error_rate", "ratio"),
+    ("latency_ms", "p50"),
+    ("latency_ms", "p95"),
+    ("ttft_ms", "p50"),
+    ("output_tokens_per_second", "mean"),
+    ("request_throughput", "value"),
+]
+
+
+@app.command("compare")
+def compare(
+    run_ids: list[str] = typer.Argument(
+        ..., help="Two or more run ids (one run compares its models)."
+    ),
+    baseline: str = typer.Option(None, "--baseline", help="Baseline run id (default: the first)."),
+    as_json: bool = typer.Option(False, "--json", help="Print the full comparison as JSON."),
+    output: Path = typer.Option(
+        None, "--output", "-o", help="Save an export (.html, .csv, or .json by extension)."
+    ),
+    api_url: str = typer.Option(None, "--api-url", help=API_URL_HELP),
+) -> None:
+    """Compare runs side by side and flag configuration differences."""
+    base = _base(api_url)
+    params: dict[str, Any] = {"run_ids": ",".join(run_ids)}
+    if baseline:
+        params["baseline"] = baseline
+    if output is not None:
+        fmt = output.suffix.lstrip(".").lower()
+        if fmt not in ("html", "csv", "json"):
+            typer.echo("error: --output must end in .html, .csv, or .json", err=True)
+            raise typer.Exit(code=1)
+        output.write_bytes(_download_bytes(f"{base}/api/v1/compare/export", **params, format=fmt))
+        typer.echo(f"saved {output}", err=True)
+    result = _request("GET", f"{base}/api/v1/compare", params=params)
+    if as_json:
+        typer.echo(json.dumps(result, indent=2))
+        return
+    comp = result["comparability"]
+    typer.echo(
+        f"comparability: {LABELS[comp['overall']]} (performance: "
+        f"{LABELS[comp['performance']]}, quality: {LABELS[comp['quality']]})"
+    )
+    for d in comp["differences"]:
+        if d["severity"] == "info":
+            continue
+        values = ", ".join(json.dumps(v) for v in d["values"].values())
+        typer.echo(f"  [{d['severity']}] {d['label']}: {values}")
+    subjects = result["subjects"]
+    by_key = {(m["metric_name"], m["aggregation"]): m for m in result["metrics"]}
+    typer.echo("")
+    typer.echo(f"{'metric':<34}" + "".join(f"{s['label'][:22]:>24}" for s in subjects))
+    keys = COMPARE_SUMMARY + sorted(
+        k for k in by_key if k[0].startswith("quality.") and k[1] == "pass_rate"
+    )
+    for name, agg in keys:
+        m = by_key.get((name, agg))
+        if not m:
+            continue
+        cells = []
+        for v in m["values"]:
+            text = _fmt(
+                v["value"] * 100 if m["unit"] == "ratio" and v["value"] is not None else v["value"]
+            )
+            if m["unit"] == "ratio" and v["value"] is not None:
+                text += "%"
+            if v["relative_change"] is not None:
+                text += f" ({v['relative_change'] * 100:+.0f}%)"
+            cells.append(f"{text:>24}")
+        typer.echo(f"{(name + ' ' + agg)[:33]:<34}" + "".join(cells))
+    for t in result["transitions"]:
+        label = next(s["label"] for s in subjects if s["id"] == t["subject_id"])
+        regress = sum(v["pass_to_fail_total"] for v in t["evaluators"].values())
+        fixed = sum(v["fail_to_pass_total"] for v in t["evaluators"].values())
+        typer.echo(
+            f"{label}: {regress} pass->fail, {fixed} fail->pass, "
+            f"{t['new_errors_total']} new errors, {t['fixed_errors_total']} fixed errors"
+        )
+    for note in result["notes"]:
+        typer.echo(f"note: {note}", err=True)
+
+
+@run_app.command("compare")
+def run_compare(
+    run_ids: list[str] = typer.Argument(...),
+    baseline: str = typer.Option(None, "--baseline"),
+    as_json: bool = typer.Option(False, "--json"),
+    output: Path = typer.Option(None, "--output", "-o"),
+    api_url: str = typer.Option(None, "--api-url", help=API_URL_HELP),
+) -> None:
+    """Same as `openllm-eval compare`."""
+    compare(run_ids, baseline, as_json, output, api_url)
+
+
+@run_app.command("rerun")
+def run_rerun(
+    run_id: str = typer.Argument(...),
+    wait: bool = typer.Option(False, "--wait", help="Follow progress until the run finishes."),
+    interval: float = typer.Option(2.0, help="Polling interval with --wait (seconds)."),
+    api_url: str = typer.Option(None, "--api-url", help=API_URL_HELP),
+) -> None:
+    """Create a new run with the same configuration as an earlier one."""
+    base = _base(api_url)
+    run = _request("POST", f"{base}/api/v1/runs/{run_id}/rerun", timeout=60.0)
+    typer.echo(f"created run {run['id']}", err=True if wait else False)
+    if wait:
+        run = _wait(base, run["id"], interval, quiet=False)
+        _print_metrics(base, run)
+        _exit_for(run["status"])
 
 
 if __name__ == "__main__":

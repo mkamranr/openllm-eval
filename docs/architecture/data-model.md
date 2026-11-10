@@ -158,12 +158,19 @@ Claim-based evaluators (M5) store one `evidence` entry per claim: `claim`, `clas
 holds `claim_counts`, the extractor and verifier names and versions, the judge identity and
 prompt version, and the abstention state. M5 adds no migration.
 
-## Proposed (each table is added by the milestone that uses it)
+### `reports` (migration `0006`) — immutable
 
-| Table | Milestone | Key columns |
-|---|---|---|
-| `comparisons` | M6 | `project_id`, `name`, `run_ids` jsonb |
-| `reports` | M6 | `run_id`, `report_type`, `storage_location`, `generated_at`, `report_metadata` |
+`run_id` (cascade delete), `report_type` (`html`, `json`, `csv`, `metrics_csv`, `markdown`),
+`storage_location` (`database`), `filename`, `media_type`, `content` (bytes), `size_bytes`,
+`sha256`, `options` (`redact_content`, `redact_endpoints`), `report_metadata` (report format
+version, framework version, run status, results included / total / truncated, warning count),
+`generated_at`.
+
+### `comparisons` (migration `0006`)
+
+`project_id` (nullable, cascade delete), `name`, `description`, `run_ids` (JSON list, in order),
+`baseline_run_id` (a run id or run-model id; null = first run), timestamps. The comparison
+itself is computed when read, so nothing derived is stored.
 
 Design notes:
 

@@ -161,6 +161,42 @@ if [[ -n "$mock_running" || "${SMOKE_MOCK:-0}" == "1" ]]; then
   # Answer quality (M4): the mock echoes the prompt, so every reference word is contained in the answer.
   printf '%s' "$metrics" | grep -Eq '"metric_name":"quality.evaluated_requests","aggregation":"count","metric_value":8(\.0)?,'     && pass "quality: 8 successful measured requests evaluated" || fail "quality.evaluated_requests metric (is this an API before M4?)"
   printf '%s' "$metrics" | grep -Eq '"metric_name":"quality.contains_reference","aggregation":"pass_rate","metric_value":1(\.0)?,'     && pass "quality: contains_reference pass rate 100% (deterministic evaluator)" || fail "quality.contains_reference metric"
+  # --- Reports and comparison (M6): offline HTML report, raw export, re-run comparison ---
+  report="$(curl -sS -X POST "$API_URL/api/v1/runs/$run_id/reports" -H 'Content-Type: application/json' -d '{"format":"html"}')"
+  report_id="$(printf '%s' "$report" | sed -n 's/^{"id":"\([0-9a-f-]*\)".*/\1/p')"
+  [[ -n "$report_id" ]] || { echo "    response: $report"; fail "generate HTML report (is this an API before M6?)"; }
+  report_file="$(mktemp)"
+  headers="$(curl -fsS -D - -o "$report_file" "$FRONTEND_URL/api/v1/reports/$report_id/download?inline=true")" \
+    || fail "download the HTML report through the frontend proxy"
+  if grep -q 'Methodology</h2>' "$report_file" && grep -q 'Reproduce</h2>' "$report_file" \
+    && ! grep -qi '<script' "$report_file" && ! grep -Eq '(src|href)="https?:' "$report_file"; then
+    pass "HTML report: methodology + reproduction, no scripts, no external resources ($(wc -c < "$report_file" | tr -d ' ') bytes)"
+  else
+    fail "HTML report content"
+  fi
+  rm -f "$report_file"
+  csp_count="$(printf '%s' "$headers" | grep -ci '^content-security-policy:')"
+  printf '%s' "$headers" | grep -i '^content-security-policy:' | grep -q "style-src 'unsafe-inline'" && [[ "$csp_count" == "1" ]] \
+    && pass "report served with its own strict CSP (one policy, through nginx)" || fail "report CSP header (found $csp_count policies)"
+  csv_report="$(curl -sS -X POST "$API_URL/api/v1/runs/$run_id/reports" -H 'Content-Type: application/json' -d '{"format":"csv"}')"
+  csv_id="$(printf '%s' "$csv_report" | sed -n 's/^{"id":"\([0-9a-f-]*\)".*/\1/p')"
+  csv_lines="$(curl -fsS "$API_URL/api/v1/reports/$csv_id/download" | wc -l | tr -d ' ')"
+  [[ "$csv_lines" -ge 10 ]] && pass "results CSV export: $((csv_lines - 1)) attempts (warm-up included, marked)" \
+    || fail "results CSV export ($csv_lines lines)"
+  rerun="$(curl -sS -X POST "$API_URL/api/v1/runs/$run_id/rerun")"
+  rerun_id="$(printf '%s' "$rerun" | sed -n 's/^{"id":"\([0-9a-f-]*\)".*/\1/p')"
+  [[ -n "$rerun_id" ]] || { echo "    response: $rerun"; fail "re-run"; }
+  comparison="$(curl -fsS "$API_URL/api/v1/compare?run_ids=$run_id,$rerun_id")"
+  printf '%s' "$comparison" | grep -q '"overall":"equivalent_configuration"' \
+    && pass "re-run $rerun_id has an equivalent configuration (comparison)" || fail "comparison of a run and its re-run"
+  curl -sS -o /dev/null -X POST "$API_URL/api/v1/runs/$rerun_id/cancel"
+  for _ in $(seq 1 30); do
+    run_id="$rerun_id"; s="$(run_status || true)"
+    [[ "$s" =~ ^(completed|completed_with_errors|cancelled|failed)$ ]] && break
+    sleep 1
+  done
+  curl -sS -o /dev/null -X DELETE "$API_URL/api/v1/runs/$rerun_id"
+  run_id="$(printf '%s' "$run" | sed -n 's/^{"id":"\([0-9a-f-]*\)".*/\1/p')"
   curl -sS -o /dev/null -X DELETE "$API_URL/api/v1/runs/$run_id"
   curl -sS -o /dev/null -X DELETE "$API_URL/api/v1/datasets/$run_ds_id"
   # --- RAG + hallucination with the LLM judge (M5): the mock server also answers judge prompts ---

@@ -104,13 +104,31 @@ def test_run_create_wait_prints_metrics(monkeypatch, tmp_path):
             ("POST", "/api/v1/runs"): (201, run_body("queued")),
             ("GET", f"/api/v1/runs/{run_body()['id']}"): (200, run_body()),
             ("GET", f"/api/v1/runs/{run_body()['id']}/metrics"): (200, METRICS),
+            ("POST", f"/api/v1/runs/{run_body()['id']}/reports"): (
+                201,
+                {"id": "r1", "filename": "nightly.html"},
+            ),
         },
     )
+    monkeypatch.setattr(
+        cli.httpx, "get", lambda url, **kw: httpx.Response(200, content=b"<!doctype html>")
+    )
+    out_dir = tmp_path / "reports"
+    out_dir.mkdir()
     result = runner.invoke(
-        cli.app, ["run", "create", "--config", str(write_config(tmp_path, CONFIG)), "--wait"]
+        cli.app,
+        [
+            "run",
+            "create",
+            "--config",
+            str(write_config(tmp_path, CONFIG)),
+            "--wait",
+            "--report-dir",
+            str(out_dir),
+        ],
     )
     assert result.exit_code == 0, result.output
-    payload = next(k["json"] for m, u, k in calls if m == "POST")
+    payload = next(k["json"] for m, u, k in calls if u.endswith("/api/v1/runs"))
     assert payload["endpoint_ids"] == [EP["id"]]
     assert payload["datasets"] == [{"dataset_id": DS["id"]}]
     assert payload["load"] == {
@@ -124,7 +142,10 @@ def test_run_create_wait_prints_metrics(monkeypatch, tmp_path):
     assert payload["suites"] == ["performance"]
     assert "41.5" in result.output and "120.2" in result.output and "3.50" in result.output
     assert "n/a" in result.output  # missing values are not shown as 0
-    assert "Milestone 6" in result.output
+    # report.formats from the config are generated and saved after the run.
+    assert (out_dir / "nightly.html").read_bytes() == b"<!doctype html>"
+    report_post = next(k["json"] for m, u, k in calls if u.endswith("/reports"))
+    assert report_post == {"format": "html", "redact_content": False, "redact_endpoints": False}
 
 
 def test_run_create_wait_exits_1_on_errors(monkeypatch, tmp_path):

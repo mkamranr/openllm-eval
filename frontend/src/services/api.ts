@@ -15,6 +15,7 @@ import type {
   ValidationResult,
 } from "../types/api";
 import type { ReadinessResponse, VersionResponse } from "../types/health";
+import type { ComparisonResult, Report, ReportCreate, SavedComparison } from "../types/reports";
 import type {
   CaseResult,
   CaseResultDetail,
@@ -221,6 +222,29 @@ export const api = {
     result: (id: string, resultId: string) => request<CaseResultDetail>(`/runs/${id}/results/${resultId}`),
     metrics: (id: string) => request<RunMetrics>(`/runs/${id}/metrics`),
     eventsUrl: (id: string) => `${API_BASE}/runs/${id}/events`,
+    rerun: (id: string) => request<RunDetail>(`/runs/${id}/rerun`, { method: "POST" }),
+  },
+
+  reports: {
+    list: (params: { run_id?: string; limit?: number; offset?: number } = {}) =>
+      request<Page<Report>>(`/reports${query({ limit: 100, ...params })}`),
+    forRun: (runId: string) => request<Page<Report>>(`/runs/${runId}/reports?limit=100`),
+    create: (runId: string, data: ReportCreate) => request<Report>(`/runs/${runId}/reports`, json("POST", data)),
+    remove: (id: string) => request<void>(`/reports/${id}`, { method: "DELETE" }),
+    downloadUrl: (id: string, inline = false) => `${API_BASE}/reports/${id}/download${inline ? "?inline=true" : ""}`,
+  },
+
+  compare: (runIds: string[], baseline?: string) =>
+    request<ComparisonResult>(`/compare${query({ run_ids: runIds.join(","), baseline })}`),
+  compareExportUrl: (runIds: string[], format: "html" | "csv" | "json", baseline?: string) =>
+    `${API_BASE}/compare/export${query({ run_ids: runIds.join(","), baseline, format })}`,
+
+  comparisons: {
+    list: () => request<Page<SavedComparison>>("/comparisons?limit=100"),
+    get: (id: string) => request<SavedComparison>(`/comparisons/${id}`),
+    create: (data: { name: string; description?: string | null; run_ids: string[]; baseline?: string | null }) =>
+      request<SavedComparison>("/comparisons", json("POST", data)),
+    remove: (id: string) => request<void>(`/comparisons/${id}`, { method: "DELETE" }),
   },
 
   evaluators: () => request<EvaluatorInfo[]>("/evaluators"),
