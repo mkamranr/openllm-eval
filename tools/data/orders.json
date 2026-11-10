@@ -1,0 +1,5 @@
+{
+  "A-1001": {"order_id": "A-1001", "status": "shipped", "carrier": "DHL", "items": 2, "total": 59.9},
+  "A-1002": {"order_id": "A-1002", "status": "processing", "carrier": null, "items": 1, "total": 12.5},
+  "B-2001": {"order_id": "B-2001", "status": "delivered", "carrier": "UPS", "items": 4, "total": 230.0}
+}

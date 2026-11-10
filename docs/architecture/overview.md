@@ -139,9 +139,10 @@ metrics version.
 When a run has quality suites, the worker evaluates each final, successful, measured attempt as
 it completes, using the full in-memory response rather than the truncated stored copy. For tool
 cases in simulated mode it first answers the model's calls with dataset fixtures (validated
-against the tool schemas; nothing is executed) and sends follow-up requests until the model
-answers or `max_tool_rounds` is reached; those follow-ups are excluded from performance
-metrics. Evaluation rows are buffered with their attempt and written in the same flush. At the
+against the tool schemas; nothing is executed). In integration mode it executes them through
+the sandboxed tool runner (`app/toolrunner`, a separate container reached over the internal
+`tools` network). Either way, it sends follow-up requests until the model answers or
+`max_tool_rounds` is reached; those follow-ups are excluded from performance metrics. Evaluation rows are buffered with their attempt and written in the same flush. At the
 end, quality aggregates are computed from the stored evaluation rows. The UI follows a run through `GET /runs/{id}/events` (Server-Sent Events read
 from the database), so any API replica can serve it.
 

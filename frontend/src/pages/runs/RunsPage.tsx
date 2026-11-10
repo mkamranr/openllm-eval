@@ -2,6 +2,7 @@ import { Activity, Plus, Search } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
+import { useCanEdit } from "../../auth/AuthContext";
 import { Callout, Card, EmptyState, PageHeader, formatRelative } from "../../components/ui";
 import { useAsync } from "../../hooks/useAsync";
 import { api } from "../../services/api";
@@ -38,6 +39,7 @@ export function ProgressBar({ run }: { run: Run }) {
 }
 
 export function RunsPage() {
+  const canEdit = useCanEdit();
   const navigate = useNavigate();
   const [filter, setFilter] = useState("");
   const [search, setSearch] = useState("");
@@ -70,9 +72,11 @@ export function RunsPage() {
         title="Benchmark Runs"
         description="Every run keeps an immutable snapshot of its configuration, every request it sent, and its metrics."
         actions={
-          <Link to="/new" className="btn btn-primary">
-            <Plus size={16} /> New evaluation
-          </Link>
+          canEdit && (
+            <Link to="/new" className="btn btn-primary">
+              <Plus size={16} /> New evaluation
+            </Link>
+          )
         }
       />
       {runs.error && <Callout tone="error" role="alert">Could not load runs: {runs.error.message}</Callout>}
@@ -97,7 +101,7 @@ export function RunsPage() {
           <EmptyState
             icon={Activity}
             title={items.length ? "No runs match" : "No benchmark runs yet"}
-            action={!items.length && <Link to="/new" className="btn btn-primary btn-sm"><Plus size={16} /> New evaluation</Link>}
+            action={canEdit && !items.length && <Link to="/new" className="btn btn-primary btn-sm"><Plus size={16} /> New evaluation</Link>}
           >
             {items.length ? "Try another filter." : "Start an evaluation to measure TTFT, latency, and throughput."}
           </EmptyState>

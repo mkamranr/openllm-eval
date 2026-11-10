@@ -196,7 +196,14 @@ async def delete_comparison(session: AsyncSession, comparison_id: uuid.UUID) -> 
 # ------------------------------------------------------------------------------------ rerun
 
 
-async def rerun(session: AsyncSession, settings: Settings, run_id: uuid.UUID) -> BenchmarkRun:
+async def rerun(
+    session: AsyncSession,
+    settings: Settings,
+    run_id: uuid.UUID,
+    *,
+    created_by: str | None = None,
+    created_by_user_id: uuid.UUID | None = None,
+) -> BenchmarkRun:
     """Create a new run with the same configuration (spec §11.3: reproducibility)."""
     run = await run_service.get_run(session, run_id)
     if any(m.endpoint_id is None for m in run.models):
@@ -223,4 +230,6 @@ async def rerun(session: AsyncSession, settings: Settings, run_id: uuid.UUID) ->
             status_code=409,
             details=[{"loc": e["loc"], "msg": e["msg"]} for e in exc.errors()],
         ) from None
-    return await run_service.create_run(session, settings, data)
+    return await run_service.create_run(
+        session, settings, data, created_by=created_by, created_by_user_id=created_by_user_id
+    )

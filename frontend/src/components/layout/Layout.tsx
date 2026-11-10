@@ -6,15 +6,18 @@ import {
   FolderKanban,
   GitCompare,
   LayoutDashboard,
+  LogOut,
   PlayCircle,
   Server,
   Settings,
   SlidersHorizontal,
   type LucideIcon,
 } from "lucide-react";
-import { NavLink, Outlet } from "react-router-dom";
+import { NavLink, Outlet, useNavigate } from "react-router-dom";
 
+import { useAuth } from "../../auth/AuthContext";
 import { useReadiness } from "../../hooks/useReadiness";
+import type { Role } from "../../types/auth";
 
 export interface NavItem {
   to: string;
@@ -22,6 +25,8 @@ export interface NavItem {
   icon: LucideIcon;
   /** Milestone that implements the page; shown as a "soon" chip until then. */
   soon?: string;
+  /** Hidden from users below this role (the server enforces permissions regardless). */
+  minRole?: Role;
 }
 
 export const NAV_SECTIONS: { title: string; items: NavItem[] }[] = [
@@ -29,7 +34,7 @@ export const NAV_SECTIONS: { title: string; items: NavItem[] }[] = [
     title: "Overview",
     items: [
       { to: "/", label: "Dashboard", icon: LayoutDashboard },
-      { to: "/new", label: "New Evaluation", icon: PlayCircle },
+      { to: "/new", label: "New Evaluation", icon: PlayCircle, minRole: "editor" },
     ],
   },
   {
@@ -51,15 +56,48 @@ export const NAV_SECTIONS: { title: string; items: NavItem[] }[] = [
   },
   {
     title: "System",
-    items: [{ to: "/settings", label: "Settings", icon: Settings, soon: "later" }],
+    items: [{ to: "/settings", label: "Settings", icon: Settings }],
   },
 ];
 
 export const NAV_ITEMS: NavItem[] = NAV_SECTIONS.flatMap((s) => s.items);
 
+const ROLE_LABEL: Record<Role, string> = { viewer: "Viewer", editor: "Editor", admin: "Administrator" };
+
+function UserBox() {
+  const { me, signOut } = useAuth();
+  const navigate = useNavigate();
+  if (!me) return null;
+  if (!me.auth_enabled) {
+    return <div className="user-box"><div className="user-meta">Sign-in disabled</div></div>;
+  }
+  const name = me.user?.display_name || me.username;
+  return (
+    <div className="user-box">
+      <div className="user-name" title={me.username}>{name}</div>
+      <div className="user-meta">
+        {ROLE_LABEL[me.role]}
+        {me.user?.source === "ldap" ? " · Windows account" : ""}
+      </div>
+      <button
+        type="button"
+        className="btn btn-sm btn-ghost-light"
+        onClick={async () => {
+          await signOut();
+          navigate("/login", { replace: true });
+        }}
+      >
+        <LogOut size={14} aria-hidden="true" /> Sign out
+      </button>
+    </div>
+  );
+}
+
 export function Layout() {
   const readiness = useReadiness();
   const healthy = readiness.data?.status === "ok";
+  const { me, can } = useAuth();
+  const visible = (item: NavItem) => !item.minRole || !me || can(item.minRole);
   return (
     <div className="app-shell">
       <nav className="sidebar" aria-label="Main">
@@ -76,7 +114,7 @@ export function Layout() {
           <div className="nav-section" key={section.title}>
             <div className="nav-section-title">{section.title}</div>
             <ul className="nav-list">
-              {section.items.map(({ to, label, icon: Icon, soon }) => (
+              {section.items.filter(visible).map(({ to, label, icon: Icon, soon }) => (
                 <li key={to}>
                   <NavLink to={to} end={to === "/"} className="nav-link">
                     <Icon size={18} aria-hidden="true" />
@@ -93,6 +131,7 @@ export function Layout() {
           </div>
         ))}
         <div className="sidebar-footer">
+          <UserBox />
           <div className="status-line">
             <span
               className="dot"
@@ -109,6 +148,17 @@ export function Layout() {
         </div>
       </nav>
       <main className="content">
+        {me && !me.auth_enabled && (
+          <div className="banner banner-warn" role="status">
+            Sign-in is disabled (AUTH_ENABLED=false): anyone who can open this page has full administrator
+            access.
+          </div>
+        )}
+        {me?.auth_enabled && me.role === "viewer" && (
+          <div className="banner banner-info" role="status">
+            You have read-only access. Ask an administrator for the editor role to run evaluations.
+          </div>
+        )}
         <Outlet />
       </main>
     </div>

@@ -39,10 +39,29 @@ x-backend-env: &backend-env
   RUN_STORE_RESPONSES: ${RUN_STORE_RESPONSES:-true}
   RUN_RESPONSE_MAX_CHARS: ${RUN_RESPONSE_MAX_CHARS:-20000}
   REPORT_MAX_RESULTS: ${REPORT_MAX_RESULTS:-50000}
+  # Authentication (see .env.example and docs/user-guide/authentication.md). deploy.sh generates
+  # AUTH_SECRET_KEY and ADMIN_INITIAL_PASSWORD on first install.
+  AUTH_ENABLED: ${AUTH_ENABLED:-true}
+  AUTH_SECRET_KEY: ${AUTH_SECRET_KEY:-}
+  ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+  ADMIN_INITIAL_PASSWORD: ${ADMIN_INITIAL_PASSWORD:-}
+  AUTH_SESSION_IDLE_MINUTES: ${AUTH_SESSION_IDLE_MINUTES:-480}
+  AUTH_SESSION_MAX_HOURS: ${AUTH_SESSION_MAX_HOURS:-72}
+  AUTH_COOKIE_SECURE: ${AUTH_COOKIE_SECURE:-auto}
+  AUTH_LOCKOUT_THRESHOLD: ${AUTH_LOCKOUT_THRESHOLD:-5}
+  AUTH_LOCKOUT_IP_THRESHOLD: ${AUTH_LOCKOUT_IP_THRESHOLD:-20}
+  AUTH_LOCKOUT_SECONDS: ${AUTH_LOCKOUT_SECONDS:-900}
+  AUTH_TRUSTED_ORIGINS: ${AUTH_TRUSTED_ORIGINS:-}
+  # Integration-mode tool execution (Milestone 9; see docs/user-guide/tool-sandbox.md).
+  TOOL_EXECUTION_ENABLED: ${TOOL_EXECUTION_ENABLED:-false}
+  TOOL_RUNNER_URL: http://tool-runner:8100
+  TOOL_RUNNER_TOKEN: ${TOOL_RUNNER_TOKEN:-}
 
 x-backend: &backend
   build:
     context: ./backend
+    args:
+      WITH_KERBEROS: ${WITH_KERBEROS:-true}
   image: openllm-eval-backend:${OPENLLM_VERSION:-0.0.1}
   restart: unless-stopped
   environment: *backend-env
@@ -96,6 +115,11 @@ services:
 
   api:
     <<: *backend
+    environment:
+      <<: *backend-env
+      # Client addresses (audit log, sign-in lockout) come from the bundled proxy's
+      # X-Forwarded-For header.
+      FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-*}
     ports:
       - "${BIND_ADDRESS:-127.0.0.1}:${API_PORT:-8000}:8000"
     depends_on:
@@ -106,7 +130,8 @@ services:
       migrate:
         condition: service_completed_successfully
     # Model endpoints are usually on other hosts, so the API/worker need outbound access.
-    networks: [internal, egress]
+    # The tools network reaches the sandboxed tool runner (integration mode).
+    networks: [internal, egress, tools]
 
   worker:
     <<: *backend
@@ -121,7 +146,7 @@ services:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
-    networks: [internal, egress]
+    networks: [internal, egress, tools]
 
   frontend:
     build:
@@ -151,11 +176,56 @@ services:
       disable: true
     networks: [egress]
 
+  # Executes administrator-declared tools for integration-mode runs (spec §5.7 mode C, §12.6).
+  # Opt-in: bash scripts/deploy.sh --tools (with TOOL_EXECUTION_ENABLED=true in .env).
+  # Deliberately not built from x-backend: it gets no secrets.env, no database or Redis access,
+  # and sits only on the internal "tools" network (no internet). No Docker socket.
+  tool-runner:
+    build:
+      context: ./backend
+      args:
+        WITH_KERBEROS: ${WITH_KERBEROS:-true}
+    image: openllm-eval-backend:${OPENLLM_VERSION:-0.0.1}
+    profiles: [tools]
+    restart: unless-stopped
+    command: ["python", "-m", "app.toolrunner.server", "--host", "0.0.0.0", "--port", "8100"]
+    environment:
+      TOOL_RUNNER_TOKEN: ${TOOL_RUNNER_TOKEN:-}  # deploy.sh --tools generates it
+      TOOLS_DIR: /tools
+      TOOLS_FILE: ${TOOLS_FILE:-tools.yaml}
+      TOOL_ALLOWED_HOSTS: ${TOOL_ALLOWED_HOSTS:-}
+      TOOL_RUNNER_MAX_CONCURRENCY: ${TOOL_RUNNER_MAX_CONCURRENCY:-8}
+      TOOL_SCRIPT_MEMORY_MB: ${TOOL_SCRIPT_MEMORY_MB:-256}
+      ENDPOINT_BLOCKED_HOSTS: postgres,redis,api,worker,frontend,tool-runner
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_FORMAT: ${LOG_FORMAT:-json}
+    volumes:
+      - ./tools:/tools:ro
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 128
+    mem_limit: ${TOOL_RUNNER_MEMORY:-1g}
+    cpus: ${TOOL_RUNNER_CPUS:-1.0}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8100/health', timeout=2).status == 200 else 1)"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks: [tools]
+
 networks:
   # Postgres and Redis live only on this network: no host ports and no outbound access.
   internal:
     internal: true
   egress: {}
+  # The worker and API reach the tool runner here. No internet access. To let HTTP tools reach a
+  # test service, attach that service (or the tool runner) to a network they share; see
+  # docs/user-guide/tool-sandbox.md.
+  tools:
+    internal: true
 
 volumes:
   postgres_data:

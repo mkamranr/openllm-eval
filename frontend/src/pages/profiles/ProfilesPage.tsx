@@ -2,6 +2,7 @@ import { Pencil, Plus, SlidersHorizontal, Trash2 } from "lucide-react";
 import { useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
 
+import { useCanEdit } from "../../auth/AuthContext";
 import { Callout, ConfirmDialog, Drawer, EmptyState, PageHeader, formatRelative } from "../../components/ui";
 import { useAsync } from "../../hooks/useAsync";
 import { ApiError, api } from "../../services/api";
@@ -18,6 +19,7 @@ import {
   DEFAULT_QUALITY,
   QUALITY_TYPES,
   QualitySettingsForm,
+  TOOL_MODE_LABELS,
   fromEvaluationConfig,
   toEvaluationConfig,
   validateQuality,
@@ -132,6 +134,7 @@ function ProfileForm({
 }
 
 export function ProfilesPage() {
+  const canEdit = useCanEdit();
   const profiles = useAsync(() => api.profiles.list(), []);
   const [editing, setEditing] = useState<Profile | "new" | null>(null);
   const [deleting, setDeleting] = useState<Profile | null>(null);
@@ -154,9 +157,11 @@ export function ProfilesPage() {
         title="Evaluation Profiles"
         description="Reusable evaluation types and settings. Runs copy a profile's settings when they start, so editing a profile never changes past runs."
         actions={
-          <button type="button" className="btn btn-primary" onClick={() => setEditing("new")}>
-            <Plus size={16} /> New profile
-          </button>
+          canEdit && (
+            <button type="button" className="btn btn-primary" onClick={() => setEditing("new")}>
+              <Plus size={16} /> New profile
+            </button>
+          )
         }
       />
       {notice && <Callout tone={notice.tone} role={notice.tone === "error" ? "alert" : "status"}>{notice.text}</Callout>}
@@ -188,7 +193,7 @@ export function ProfilesPage() {
               <div className="meta">
                 <span>{p.load.profile ?? "smoke"} load · concurrency {p.load.concurrency ?? 1}</span>
                 {p.suites.includes("tool_calling") && (
-                  <span>tools {p.evaluation.tool_mode === "generation_only" ? "inspected only" : "simulated"}</span>
+                  <span>tools {TOOL_MODE_LABELS[p.evaluation.tool_mode ?? "simulated"]}</span>
                 )}
                 <span>Updated {formatRelative(p.updated_at)}</span>
               </div>

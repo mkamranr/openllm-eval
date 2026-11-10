@@ -6,11 +6,12 @@ Please report vulnerabilities privately. Use GitHub's "Report a vulnerability" (
 advisory) on this repository rather than opening a public issue. Include steps to reproduce,
 affected versions, and the impact. We aim to acknowledge reports within 5 business days.
 
-## Current security posture (Milestone 7)
+## Current security posture (Milestone 9)
 
-- **No authentication yet.** By default, Compose binds published ports to `127.0.0.1`. If you set
-  `BIND_ADDRESS=0.0.0.0`, the UI and API are reachable by anyone who can reach the host. Do this
-  only on a trusted network.
+- **Sign-in is required** for every API route except health checks and the sign-in endpoints
+  (see [Authentication](#authentication-and-roles) below). By default, Compose still binds
+  published ports to `127.0.0.1`. For access beyond a test network, put a TLS proxy in front of
+  the UI.
 - PostgreSQL and Redis sit on an internal Docker network with no published ports and no outbound
   access.
 - The containers run as non-root users, with `no-new-privileges`.
@@ -54,8 +55,8 @@ goes through a network policy:
 **Residual risk:** between the policy's DNS lookup and httpx's own connection there is a short
 window in which a DNS-rebinding attacker could return a different address. Pinning the connection
 to the checked IP is planned. Until then, prefer `ENDPOINT_ALLOWED_HOSTS` on shared deployments.
-Note that the app has **no authentication yet**: anyone who can reach the UI can register
-endpoints and trigger requests within this policy.
+Only editors and administrators can register endpoints and trigger requests within this
+policy.
 
 ### Dataset uploads
 
@@ -85,10 +86,11 @@ endpoints and trigger requests within this policy.
 
 ### Evaluation and tool calling
 
-- **No tool is ever executed.** Tool-calling evaluation either inspects the calls
+- **By default, no tool is ever executed.** Tool-calling evaluation either inspects the calls
   (`generation_only`) or answers them with fixture results stored in the dataset (`simulated`).
   Arguments are validated against the tool's JSON Schema before a fixture is chosen. Real
-  execution ("integration" mode) is rejected by the API.
+  execution (`integration`) is available only when an administrator enables the tool sandbox
+  (below).
 - Dataset content, model outputs, and tool arguments are treated as untrusted data: they are
   parsed as JSON and compared, never evaluated as code. Fixture results sent back to the model
   are capped in size.
@@ -122,8 +124,8 @@ endpoints and trigger requests within this policy.
 - Reports contain generated text and endpoint URLs unless they are generated with
   `redact_content` / `redact_endpoints`. API keys are never included; snapshots only ever hold
   a secret reference name.
-- Reports are stored in the database, readable by anyone who can reach the API (no
-  authentication yet). They are deleted with their run.
+- Reports are stored in the database and readable by every signed-in user (viewer and
+  above). Downloads are recorded in the audit log. They are deleted with their run.
 
 ### Resource telemetry
 
@@ -136,6 +138,83 @@ endpoints and trigger requests within this policy.
 - Scrape failures are recorded (a count and a short last-error message) and never fail a run.
   `redact_endpoints` replaces telemetry URLs in reports.
 
-### Planned
+### Authentication and roles
 
-Sandboxed tool execution ("integration" mode) and authentication are tracked in later milestones.
+- Roles `viewer` < `editor` < `admin` are enforced centrally in the API router, not route by
+  route: reads need `viewer`, changes need `editor`, and users, authentication settings and the
+  audit log need `admin`. A test checks that every non-public route rejects anonymous requests.
+- **Passwords** are hashed with argon2id. The policy: at least 12 characters, at least 5
+  different characters, and not containing the username. Unknown usernames are checked against
+  a dummy hash, so timing does not reveal which accounts exist.
+- **Sessions** are random tokens in an HttpOnly, SameSite=Lax cookie. The cookie is Secure on
+  HTTPS. Only a SHA-256 hash is stored. Sessions have an idle and an absolute timeout.
+  Changing a password ends the user's other sessions.
+- **CSRF**: cookie-authenticated changes need the `X-OpenLLM-CSRF` header, and an `Origin`, when sent, must be
+  this site or a trusted origin. Cross-site forms cannot set the header.
+- **API tokens** (`oel_…`) are shown once and stored as SHA-256 hashes. They can expire and be
+  revoked, and they act with their owner's current role. Disabled accounts' tokens stop working.
+- **Lockout**: failures are counted per username and per client address, in Redis. If Redis is
+  unavailable, the lockout is skipped (fails open) rather than blocking all sign-ins.
+- **Bootstrap administrator**: created only when there are no users. It must change its password
+  before any other request succeeds (`403 password_change_required`).
+- **Directory secrets** (the LDAP bind password and the Kerberos keytab) are encrypted at rest
+  with AES-256-GCM. The key is derived (HKDF) from `AUTH_SECRET_KEY`, and each value is bound to
+  its purpose. They are write-only in the API, and never logged or returned.
+- **LDAP**: LDAPS or StartTLS, with certificate verification on by default and an optional
+  private CA. User input is escaped in search filters, and empty passwords are rejected (they
+  would be an unauthenticated bind). Directory URLs may not point at this deployment's own
+  services (`ENDPOINT_BLOCKED_HOSTS`). Unlike model endpoints, they may be on private networks.
+- **Kerberos**: the keytab is written to a private (0600) temporary file only for the duration
+  of a check.
+- **Audit log**: sign-ins (including failures), sign-outs, password, user, role, token and
+  settings changes, and report downloads. Details are redacted like logs.
+- Logs redact session cookies, `oel_` tokens and `Negotiate` headers.
+- `AUTH_ENABLED=false` turns all of this off (every request is an administrator). The UI and the
+  readiness check warn about it.
+
+**Residual risk:** the API trusts `X-Forwarded-For` from any address (`FORWARDED_ALLOW_IPS=*`),
+so that the audit log and the per-address lockout see real client addresses behind the bundled
+proxy. A client calling the API port directly can forge the header. Keep the API port bound to
+`127.0.0.1`, or set `FORWARDED_ALLOW_IPS` to the proxy's address. Per-username lockout is not
+affected.
+
+### Tool sandbox (integration mode)
+
+See the [tool sandbox guide](docs/user-guide/tool-sandbox.md).
+
+- **Off by default.** It needs `TOOL_EXECUTION_ENABLED=true` and the `tool-runner` service
+  (`deploy.sh --tools`). Runs asking for it are otherwise rejected with a 422.
+- **Only administrator-declared tools run.** They are listed in `tools/tools.yaml`, which is
+  mounted read-only. There is no UI or API to add or change tools. Each run records the file's
+  SHA-256 and every tool version.
+- **The tool-runner container:**
+  - read-only root filesystem, a 64 MB `/tmp`;
+  - non-root user, `cap_drop: ALL`, `no-new-privileges`;
+  - process, memory and CPU limits;
+  - no Docker socket;
+  - no `secrets.env`;
+  - attached only to the internal `tools` network: no internet, no PostgreSQL or Redis.
+- The worker and the API authenticate to the runner with `TOOL_RUNNER_TOKEN`, compared in
+  constant time.
+- **Arguments** are validated twice: against the schema the dataset offered the model, and
+  against the declared `parameters`.
+- **Script tools** run in a fresh `python -I -S` process per call:
+  - empty environment;
+  - a temporary working directory, deleted afterwards;
+  - its own process group, killed on timeout;
+  - rlimits on CPU time, address space, file size, open files and core dumps;
+  - output capped.
+- **HTTP tools:**
+  - only reach `TOOL_ALLOWED_HOSTS` (an empty allowlist blocks them all), checked with DNS
+    before every call;
+  - redirects are not followed, proxy variables are ignored, and responses are capped;
+  - credential headers and `env:` references are rejected in `tools.yaml`.
+- Tool results are cut to 2,000 characters before they reach the model.
+
+**Residual risk:**
+
+- Scripts share the runner container; they are isolated from each other by process, not by
+  separate containers or a VM sandbox. Declared scripts are reviewed code kept in bounds by the
+  limits, not arbitrary untrusted code.
+- A tool can reach the API over the `tools` network, as an unauthenticated client.
+- HTTP tools have the same DNS-rebinding window as model endpoints.

@@ -201,6 +201,8 @@ class RunRead(BaseModel):
     status: str
     suites: list[str]
     framework_version: str
+    # Username of whoever started the run (null for runs created before sign-in existed).
+    created_by: str | None = None
     created_at: datetime
     updated_at: datetime
     started_at: datetime | None

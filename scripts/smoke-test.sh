@@ -3,8 +3,10 @@
 #
 #   ./scripts/smoke-test.sh                       # defaults to localhost
 #   API_URL=http://server:8000 FRONTEND_URL=http://server:3000 ./scripts/smoke-test.sh
+#   SMOKE_TOKEN=oel_... ./scripts/smoke-test.sh   # without docker access: an admin's API token
 #
-# Checks: migrations exited 0, API liveness/readiness (DB + Redis + worker), version, dataset
+# Checks: migrations exited 0, API liveness/readiness (DB + Redis + worker), sign-in (token, session
+# cookie, CSRF, roles), version, dataset
 # import/export hash, frontend served, /api proxied and, with the mock model server, benchmark,
 # quality, RAG, report, comparison, and context-window + telemetry runs. Exits non-zero on the first failure.
 set -euo pipefail
@@ -53,6 +55,75 @@ wait_for "worker heartbeat visible" \
 
 ready="$(curl -fsS "$API_URL/api/v1/health/ready")"
 echo "    readiness: $ready"
+
+# --- Authentication (Milestone 8) ---
+# Every later check uses an API token: SMOKE_TOKEN if given, otherwise a short-lived token for a
+# temporary service account created inside the API container (removed again on exit).
+code_of() { command curl -s -o /dev/null -w '%{http_code}' "$@"; }
+SMOKE_SERVICE_USER=""
+cleanup_auth() {
+  if [[ -n "$SMOKE_SERVICE_USER" ]]; then
+    $COMPOSE exec -T api python -m app.cli.admin delete-user "$SMOKE_SERVICE_USER" >/dev/null 2>&1 || true
+  fi
+}
+trap cleanup_auth EXIT
+if printf '%s' "$ready" | grep -q '"auth_enabled":false'; then
+  echo "  WARN sign-in is disabled (AUTH_ENABLED=false): everyone is an administrator"
+else
+  [[ "$(code_of "$API_URL/api/v1/projects")" == "401" ]] \
+    && pass "anonymous API request rejected (401)" || fail "anonymous request was not rejected"
+  [[ "$(code_of "$API_URL/api/v1/auth/providers")" == "200" ]] \
+    && pass "sign-in providers endpoint is public" || fail "/auth/providers"
+  if [[ -z "${SMOKE_TOKEN:-}" ]]; then
+    if ! command -v docker >/dev/null 2>&1 || [[ "${SKIP_COMPOSE_CHECKS:-0}" == "1" ]]; then
+      fail "sign-in is required: set SMOKE_TOKEN to an administrator's API token"
+    fi
+    SMOKE_SERVICE_USER="smoke-test-$RANDOM$RANDOM"
+    SMOKE_TOKEN="$($COMPOSE exec -T api python -m app.cli.admin create-token \
+      --service-user "$SMOKE_SERVICE_USER" --role admin --ttl 1h --name smoke-test | tr -d '\r')" \
+      || fail "create a smoke-test token (python -m app.cli.admin create-token)"
+  fi
+  # From here on, every curl call carries the token.
+  curl() { command curl -H "Authorization: Bearer $SMOKE_TOKEN" "$@"; }
+  me="$(curl -fsS "$API_URL/api/v1/auth/me")" || fail "token rejected by /auth/me"
+  printf '%s' "$me" | grep -q '"role":"admin"' \
+    && pass "API token accepted ($(printf '%s' "$me" | sed -n 's/.*"username":"\([^"]*\)".*/\1/p'), admin)" \
+    || fail "smoke token is not an administrator's: $me"
+
+  # A temporary local viewer: cookie sign-in, CSRF, role check, sign-out.
+  viewer="smoke-viewer-$RANDOM$RANDOM"
+  viewer_pw="Smoke$RANDOM$RANDOM$RANDOM"
+  created="$(curl -sS -X POST "$API_URL/api/v1/users" -H 'Content-Type: application/json' \
+    -d "{\"username\":\"$viewer\",\"role\":\"viewer\",\"password\":\"$viewer_pw\",\"must_change_password\":false}")"
+  viewer_id="$(printf '%s' "$created" | sed -n 's/^{"id":"\([0-9a-f-]*\)".*/\1/p')"
+  [[ -n "$viewer_id" ]] && pass "created temporary viewer $viewer" || { echo "    $created"; fail "create a local user"; }
+  jar="$(mktemp)"
+  login_body="{\"username\":\"$viewer\",\"password\":\"$viewer_pw\"}"
+  [[ "$(code_of -c "$jar" -X POST "$FRONTEND_URL/api/v1/auth/login" -H 'Content-Type: application/json' -d "$login_body")" == "403" ]] \
+    && pass "sign-in without the CSRF header refused" || fail "sign-in accepted without the CSRF header"
+  [[ "$(code_of -c "$jar" -X POST "$FRONTEND_URL/api/v1/auth/login" -H 'Content-Type: application/json' \
+      -H 'X-OpenLLM-CSRF: 1' -d "$login_body")" == "200" ]] \
+    && pass "password sign-in through the UI proxy" || fail "password sign-in"
+  grep -q 'oel_session' "$jar" && pass "HttpOnly session cookie set" || fail "no session cookie"
+  command curl -fsS -b "$jar" "$FRONTEND_URL/api/v1/auth/me" | grep -q '"role":"viewer"' \
+    && pass "session cookie identifies the viewer" || fail "/auth/me with the session cookie"
+  [[ "$(code_of -b "$jar" -X POST "$FRONTEND_URL/api/v1/projects" -H 'Content-Type: application/json' \
+      -H 'X-OpenLLM-CSRF: 1' -d '{"name":"smoke-viewer-denied"}')" == "403" ]] \
+    && pass "viewer may not create projects (403)" || fail "viewer was allowed to change data"
+  [[ "$(code_of -b "$jar" -X POST "$FRONTEND_URL/api/v1/auth/logout" -H 'X-OpenLLM-CSRF: 1')" == "204" ]] \
+    && [[ "$(code_of -b "$jar" "$FRONTEND_URL/api/v1/auth/me")" == "401" ]] \
+    && pass "sign-out ends the session" || fail "sign-out"
+  rm -f "$jar"
+  curl -sS -o /dev/null -X DELETE "$API_URL/api/v1/users/$viewer_id"
+
+  admin_name="$(env_value ADMIN_USERNAME)"
+  users="$(curl -fsS "$API_URL/api/v1/users")"
+  if printf '%s' "$users" | grep -q "\"username\":\"${admin_name:-admin}\""; then
+    pass "bootstrap administrator '${admin_name:-admin}' exists"
+  else
+    echo "  WARN no '${admin_name:-admin}' user (set ADMIN_INITIAL_PASSWORD, or create one with app.cli.admin)"
+  fi
+fi
 
 version="$(curl -fsS "$API_URL/api/v1/version")" || fail "version endpoint"
 pass "version: $version"
@@ -279,6 +350,56 @@ if [[ -n "$mock_running" || "${SMOKE_MOCK:-0}" == "1" ]]; then
   curl -sS -o /dev/null -X DELETE "$API_URL/api/v1/runs/$ctx_run_id"
   curl -sS -o /dev/null -X DELETE "$API_URL/api/v1/datasets/$ctx_ds_id"
   curl -sS -o /dev/null -X DELETE "$API_URL/api/v1/endpoints/$ctx_ep_id"
+
+  # --- Integration-mode tool execution (M9): the mock model calls the example calculator tool,
+  #     which runs in the sandboxed tool runner; the model then answers with the real result ---
+  if printf '%s' "$(curl -fsS "$API_URL/api/v1/tools/status")" | grep -q '"reachable":true'; then
+    pass "tool runner reachable (integration mode available)"
+    tool_ep_body="{\"name\":\"$name-tools\",\"base_url\":\"$MOCK_BASE_URL\",\"model_identifier\":\"mock-model\","
+    tool_ep_body+='"request_configuration":{"stream":false,"headers":{"X-Mock-Mode":"tool_call",'
+    tool_ep_body+='"X-Mock-Tool-Name":"calculator","X-Mock-Tool-Args":"{\"expression\":\"6*7\"}"}}}'
+    tool_ep="$(curl -sS -X POST "$API_URL/api/v1/endpoints" -H 'Content-Type: application/json' -d "$tool_ep_body")"
+    tool_ep_id="$(printf '%s' "$tool_ep" | sed -n 's/^{"id":"\([0-9a-f-]*\)".*/\1/p')"
+    [[ -n "$tool_ep_id" ]] || { echo "    response: $tool_ep"; fail "register tool-calling endpoint"; }
+    tool_ds_file="$(mktemp)"
+    printf '%s\n' '{"id":"calc","type":"tool_call","input":"What is 6 times 7?","tools":[{"type":"function","function":{"name":"calculator","parameters":{"type":"object","properties":{"expression":{"type":"string"}},"required":["expression"]}}}],"expected_tool_calls":[{"name":"calculator","arguments":{"expression":"6*7"}}],"expected_final_answer":"42"}' > "$tool_ds_file"
+    tool_ds="$(curl -sS -X POST "$API_URL/api/v1/datasets" -F "name=smoke-tools-$RANDOM$RANDOM" -F dataset_type=tool_call \
+      -F "file=@$tool_ds_file;filename=tools.jsonl")"
+    rm -f "$tool_ds_file"
+    tool_ds_id="$(printf '%s' "$tool_ds" | sed -n 's/^{"id":"\([0-9a-f-]*\)".*/\1/p')"
+    [[ -n "$tool_ds_id" ]] || { echo "    response: $tool_ds"; fail "create tool_call dataset"; }
+    tool_run_body="{\"name\":\"smoke-tools\",\"endpoint_ids\":[\"$tool_ep_id\"],\"datasets\":[{\"dataset_id\":\"$tool_ds_id\"}],"
+    tool_run_body+='"suites":["tool_calling"],"evaluation":{"tool_mode":"integration"},"load":{"profile":"sequential"}}'
+    tool_run="$(curl -sS -X POST "$API_URL/api/v1/runs" -H 'Content-Type: application/json' -d "$tool_run_body")"
+    run_id="$(printf '%s' "$tool_run" | sed -n 's/^{"id":"\([0-9a-f-]*\)".*/\1/p')"
+    [[ -n "$run_id" ]] || { echo "    response: $tool_run"; fail "create integration-mode run"; }
+    printf '%s' "$tool_run" | grep -q '"tool_registry":{"sha256":"[0-9a-f]\{64\}"' \
+      && pass "integration-mode run records the tool registry hash" || fail "tool registry in the run snapshot"
+    deadline=$((SECONDS + TIMEOUT_SECONDS))
+    status="$(run_status || true)"
+    until [[ "$status" =~ ^(completed|completed_with_errors|cancelled|failed)$ ]]; do
+      (( SECONDS < deadline )) || fail "integration-mode run did not finish (status: $status)"
+      sleep 1
+      status="$(run_status || true)"
+    done
+    [[ "$status" == "completed" ]] || fail "integration-mode run finished with status $status"
+    result_id="$(curl -fsS "$API_URL/api/v1/runs/$run_id/results?phase=measured&limit=1" \
+      | sed -n 's/^{"items":\[{"id":"\([0-9a-f-]*\)".*/\1/p')"
+    detail="$(curl -fsS "$API_URL/api/v1/runs/$run_id/results/$result_id")"
+    if printf '%s' "$detail" | grep -q '"mode":"integration"' && printf '%s' "$detail" | grep -q '"executed":true' \
+      && printf '%s' "$detail" | grep -q 'result\\": 42'; then
+      pass "tool call executed in the sandbox: calculator(6*7) = 42 reached the model"
+    else
+      printf '%s' "$detail" | head -c 1500; echo
+      fail "integration-mode tool execution"
+    fi
+    curl -sS -o /dev/null -X DELETE "$API_URL/api/v1/runs/$run_id"
+    curl -sS -o /dev/null -X DELETE "$API_URL/api/v1/datasets/$tool_ds_id"
+    curl -sS -o /dev/null -X DELETE "$API_URL/api/v1/endpoints/$tool_ep_id"
+  else
+    echo "  SKIP integration-mode tool check (enable with TOOL_EXECUTION_ENABLED=true and deploy.sh --tools)"
+  fi
+
   curl -sS -o /dev/null -X DELETE "$API_URL/api/v1/endpoints/$id"
   pass "smoke run, dataset and endpoint removed"
 else

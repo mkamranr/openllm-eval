@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
 
+import { useCanEdit } from "../../auth/AuthContext";
 import { EndpointStatusBadge, StatusBadge } from "../../components/status/StatusBadge";
 import { Callout, Card, EmptyState, StatCard, formatMs, formatRelative } from "../../components/ui";
 import { useAsync } from "../../hooks/useAsync";
@@ -23,6 +24,7 @@ import { ProgressBar } from "../runs/RunsPage";
 import { RunStatusBadge, profileSummary } from "../runs/runMeta";
 
 export function Dashboard() {
+  const canEdit = useCanEdit();
   const readiness = useAsync(() => api.readiness(), []);
   const version = useAsync(() => api.version(), []);
   const endpoints = useAsync(() => api.endpoints.list(), []);
@@ -214,9 +216,11 @@ export function Dashboard() {
               icon={Activity}
               title="No benchmark runs yet"
               action={
-                <Link to="/new" className="btn btn-primary btn-sm">
-                  <Plus size={16} /> New evaluation
-                </Link>
+                canEdit && (
+                  <Link to="/new" className="btn btn-primary btn-sm">
+                    <Plus size={16} /> New evaluation
+                  </Link>
+                )
               }
             >
               Run a performance evaluation to measure TTFT, latency, and throughput.

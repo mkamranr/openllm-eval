@@ -8,6 +8,14 @@ FROM ${UV_IMAGE} AS uv
 
 # ---- build: resolve and install pinned dependencies from uv.lock ----
 FROM ${PYTHON_IMAGE} AS build
+# Windows single sign-on (Kerberos) needs the gssapi package, which is compiled against MIT
+# krb5 here. Build with --build-arg WITH_KERBEROS=false (or WITH_KERBEROS=false in .env) to skip
+# it; password sign-in with Active Directory works either way.
+ARG WITH_KERBEROS=true
+RUN if [ "$WITH_KERBEROS" = "true" ]; then \
+      apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev libkrb5-dev \
+      && rm -rf /var/lib/apt/lists/*; \
+    fi
 COPY --from=uv /uv /usr/local/bin/uv
 ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
@@ -18,14 +26,21 @@ WORKDIR /src
 # Dependencies first for layer caching.
 COPY pyproject.toml uv.lock README.md ./
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-dev --no-install-project
+    if [ "$WITH_KERBEROS" = "true" ]; then EXTRA="--extra kerberos"; else EXTRA=""; fi; \
+    uv sync --frozen --no-dev --no-install-project $EXTRA
 
 COPY app ./app
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-dev --no-editable
+    if [ "$WITH_KERBEROS" = "true" ]; then EXTRA="--extra kerberos"; else EXTRA=""; fi; \
+    uv sync --frozen --no-dev --no-editable $EXTRA
 
 # ---- runtime ----
 FROM ${PYTHON_IMAGE} AS runtime
+ARG WITH_KERBEROS=true
+RUN if [ "$WITH_KERBEROS" = "true" ]; then \
+      apt-get update && apt-get install -y --no-install-recommends libgssapi-krb5-2 \
+      && rm -rf /var/lib/apt/lists/*; \
+    fi
 ENV PATH=/opt/venv/bin:$PATH \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1

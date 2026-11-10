@@ -72,9 +72,10 @@ from app.db.models.run import (
 from app.evaluators.base import EvaluationContext, Evaluator, ModelOutput, ToolCallOutput
 from app.evaluators.judge import Judge
 from app.evaluators.registry import JUDGE_SUITES, QUALITY_SUITES, evaluate_case, evaluators_for
-from app.evaluators.tools import needs_simulation, simulate_tool_result
+from app.evaluators.tools import check_tool_call, needs_simulation, simulate_tool_result
 from app.execution.plan import Step, steps_of
 from app.execution.prompting import build_request
+from app.execution.tools_client import ToolRunnerClient, ToolRunnerError
 from app.metrics import context as context_metrics
 from app.metrics import performance, quality
 from app.metrics.stats import percentile
@@ -290,6 +291,10 @@ class RunExecutor:
         self.eval_config: dict[str, Any] = {}
         self.embedder: Any = None
         self.simulate_tools = False
+        # "simulated" (fixtures, mode B) or "integration" (tool runner, mode C).
+        self.tool_mode = "simulated"
+        self.tool_client: ToolRunnerClient | None = None
+        self.tool_client_error: str | None = None
 
     # ------------------------------------------------------------------ control
 
@@ -625,7 +630,11 @@ class RunExecutor:
             )
             output = _model_output(response) if evaluate else None
             simulation = None
-            if output is not None and self.simulate_tools and needs_simulation(spec.case, output):
+            if (
+                output is not None
+                and self.simulate_tools
+                and needs_simulation(spec.case, output, self.tool_mode)
+            ):
                 simulation = await self._simulate(state, spec, response)
                 output.simulation = simulation
             row = self._record(
@@ -674,13 +683,49 @@ class RunExecutor:
             if self._stop.is_set():
                 return
 
+    async def _execute_tool(self, case: dict[str, Any], call: ToolCallOutput) -> dict[str, Any]:
+        """Integration mode: one tool call through the tool runner."""
+        problem = check_tool_call(case, call)
+        if problem is not None:
+            return problem | {"executed": False, "error": problem["result"]["error"]}
+        if self.tool_client is None:
+            error = self.tool_client_error or "The tool runner is not configured."
+            return {
+                "ok": False,
+                "fixture": False,
+                "result": {"error": error},
+                "executed": False,
+                "error": error,
+            }
+        # check_tool_call guarantees a known tool name and an arguments object.
+        res = await self.tool_client.execute(call.name or "", call.arguments or {})
+        ok = bool(res.get("ok"))
+        error = None if ok else str(res.get("error") or "The tool failed.")
+        return {
+            "ok": ok,
+            "fixture": False,
+            "result": res.get("result") if ok else {"error": error},
+            # Executed = the runner ran the tool (its own failures included); False when the
+            # runner was unreachable or rejected the call before running it.
+            "executed": res.get("duration_ms") is not None,
+            "duration_ms": res.get("duration_ms"),
+            "error": error,
+            "truncated": bool(res.get("truncated")),
+        }
+
     async def _simulate(
         self, state: ModelState, spec: CaseSpec, response: ModelResponse
     ) -> dict[str, Any]:
-        """Simulated tool execution (spec §5.7 mode B): answer each tool call with the case's
-        fixture result (or a validation error) and let the model continue, up to
-        ``max_tool_rounds`` follow-up requests. No tool is ever executed. Follow-ups are not
-        part of the performance measurement."""
+        """Answer each tool call and let the model continue, up to ``max_tool_rounds``
+        follow-up requests. Follow-ups are not part of the performance measurement.
+
+        - Simulated (spec §5.7 mode B): the case's fixture result, or a validation error. No
+          tool is executed.
+        - Integration (mode C): the call is checked against the case's tool schema, then
+          executed by the sandboxed tool runner. Runner failures are recorded and sent to the
+          model as an error; the run continues.
+        """
+        integration = self.tool_mode == "integration"
         max_rounds = int(self.eval_config.get("max_tool_rounds", 3))
         messages = list(spec.request.messages)
         rounds: list[dict[str, Any]] = []
@@ -702,21 +747,32 @@ class RunExecutor:
             tool_messages = []
             results = []
             for tc, call in zip(current.tool_calls, calls, strict=True):
-                sim = simulate_tool_result(spec.case, _tool_output(tc))
+                if integration:
+                    sim = await self._execute_tool(spec.case, _tool_output(tc))
+                else:
+                    sim = simulate_tool_result(spec.case, _tool_output(tc))
                 payload = sim["result"]
                 text = (
                     payload if isinstance(payload, str) else json.dumps(payload, ensure_ascii=False)
                 )
+                # The model sees at most MAX_TOOL_RESULT_CHARS of a tool result.
+                text = text[:MAX_TOOL_RESULT_CHARS]
                 tool_messages.append({"role": "tool", "tool_call_id": call["id"], "content": text})
-                results.append(
-                    {
-                        "name": tc.name,
-                        "arguments": tc.arguments if tc.arguments is not None else tc.arguments_raw,
-                        "fixture_matched": sim["fixture"],
-                        "valid": sim["ok"],
-                        "result": text[:MAX_TOOL_RESULT_CHARS],
+                entry = {
+                    "name": tc.name,
+                    "arguments": tc.arguments if tc.arguments is not None else tc.arguments_raw,
+                    "fixture_matched": sim["fixture"],
+                    "valid": sim["ok"],
+                    "result": text,
+                }
+                if integration:
+                    entry |= {
+                        "executed": sim["executed"],
+                        "duration_ms": sim.get("duration_ms"),
+                        "error": sim.get("error"),
+                        "truncated": sim.get("truncated", False),
                     }
-                )
+                results.append(entry)
             messages = [
                 *messages,
                 {"role": "assistant", "content": current.content, "tool_calls": calls},
@@ -736,7 +792,7 @@ class RunExecutor:
                     "next_tool_calls": [tc.name for tc in follow.tool_calls],
                 }
             )
-            base = {"mode": "simulated", "executed": False, "rounds": rounds}
+            base = {"mode": self.tool_mode, "executed": integration, "rounds": rounds}
             if not follow.ok:
                 return base | {
                     "completed": False,
@@ -749,13 +805,14 @@ class RunExecutor:
                 return base | {"completed": True, "final_content": follow.content or ""}
             current = follow
         return {
-            "mode": "simulated",
-            "executed": False,
+            "mode": self.tool_mode,
+            "executed": integration,
             "rounds": rounds,
             "completed": False,
             "error_kind": "max_rounds",
             "stop_reason": (
-                f"The model was still calling tools after {max_rounds} simulated round(s)."
+                f"The model was still calling tools after {max_rounds} "
+                f"{'tool' if integration else 'simulated'} round(s)."
             ),
             "final_content": None,
         }
@@ -1169,9 +1226,17 @@ class RunExecutor:
         suites = [s for s in evaluation.get("suites") or [] if s in QUALITY_SUITES]
         self.eval_config = evaluation.get("config") or {}
         self.evaluators = evaluators_for(suites, self.eval_config) if suites else []
-        self.simulate_tools = (
-            "tool_calling" in suites and self.eval_config.get("tool_mode") == "simulated"
+        self.tool_mode = self.eval_config.get("tool_mode") or "simulated"
+        self.simulate_tools = "tool_calling" in suites and self.tool_mode in (
+            "simulated",
+            "integration",
         )
+        if self.simulate_tools and self.tool_mode == "integration":
+            try:
+                self.tool_client = ToolRunnerClient.from_settings(self.settings)
+            except ToolRunnerError as exc:
+                # Recorded on every tool call; the model gets the error and the run goes on.
+                self.tool_client_error = str(exc)
         embedding_snapshot = evaluation.get("embedding_endpoint")
         if self.evaluators and embedding_snapshot:
             embed_adapter = self._adapter_from_snapshot(embedding_snapshot, None)

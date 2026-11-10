@@ -2,6 +2,7 @@ import { Check, Database, Download, Plus, Search, Upload } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 
+import { useCanEdit } from "../../auth/AuthContext";
 import { Callout, Card, EmptyState, PageHeader, TabPanel, Tabs, formatRelative } from "../../components/ui";
 import { useAsync } from "../../hooks/useAsync";
 import { api } from "../../services/api";
@@ -13,6 +14,7 @@ import { ImportPanel } from "./ImportPanel";
 type Tab = "mine" | "samples" | "import" | "generate";
 
 export function DatasetsPage() {
+  const canEdit = useCanEdit();
   const [params, setParams] = useSearchParams();
   const tab = (["mine", "samples", "import", "generate"].includes(params.get("tab") ?? "") ? params.get("tab") : "mine") as Tab;
   const setTab = (t: Tab) => setParams(t === "mine" ? {} : { tab: t }, { replace: true });
@@ -58,7 +60,7 @@ export function DatasetsPage() {
         title="Datasets"
         description="Versioned evaluation cases. Every version is immutable and identified by a SHA-256 content hash."
         actions={
-          tab !== "import" && (
+          canEdit && tab !== "import" && (
             <button type="button" className="btn btn-primary" onClick={() => setTab("import")}>
               <Plus size={16} /> Import dataset
             </button>

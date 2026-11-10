@@ -343,10 +343,15 @@ class ToolHallucination(_ToolEvaluator):
 
 
 def final_text(case: dict[str, Any], output: ModelOutput) -> tuple[str | None, str]:
-    """The answer the user would see: after simulated tool execution if it ran, else the
-    direct answer. Returns (text, source)."""
+    """The answer the user would see: after simulated or executed tool results if tools were
+    answered, else the direct answer. Returns (text, source)."""
     if output.simulation:
-        return output.simulation.get("final_content"), "after_simulated_tools"
+        source = (
+            "after_executed_tools"
+            if output.simulation.get("mode") == "integration"
+            else "after_simulated_tools"
+        )
+        return output.simulation.get("final_content"), source
     return output.content, "direct"
 
 
@@ -354,8 +359,8 @@ class ToolFinalAnswer(_ToolEvaluator):
     name = "tool_final_answer"
     title = "Final answer"
     description = (
-        "The final answer (after simulated tool results, when tools were called) contains the "
-        "case's expected_final_answer (normalized, whole words)."
+        "The final answer (after simulated or executed tool results, when tools were called) "
+        "contains the case's expected_final_answer (normalized, whole words)."
     )
 
     async def evaluate(self, case, output, context):  # type: ignore[no-untyped-def]
@@ -364,8 +369,8 @@ class ToolFinalAnswer(_ToolEvaluator):
             return self.not_applicable("The case has no expected_final_answer.")
         if output.tool_calls and not output.simulation:
             reason = (
-                "The model called tools; judging the final answer needs simulated tool execution "
-                "(tool_mode 'simulated' and tool_results fixtures)."
+                "The model called tools; judging the final answer needs tool results "
+                "(tool_mode 'simulated' with tool_results fixtures, or 'integration')."
             )
             return self.not_applicable(reason)
         text, source = final_text(case, output)
@@ -439,13 +444,9 @@ def tool_evaluators() -> list[Evaluator]:
 # ------------------------------------------------------------------- simulated execution
 
 
-def simulate_tool_result(case: dict[str, Any], call: ToolCallOutput) -> dict[str, Any]:
-    """The fixture result for one tool call, or an error message for the model.
-
-    Order: unknown tool → error; malformed or schema-invalid arguments → error; a fixture whose
-    ``arguments`` equal the call's (by :func:`values_equal`) → its result; otherwise a fixture
-    for the tool with ``arguments: null`` (matches any call) → its result; otherwise an error.
-    """
+def check_tool_call(case: dict[str, Any], call: ToolCallOutput) -> dict[str, Any] | None:
+    """An error result when the call cannot be answered at all (unknown tool, malformed or
+    schema-invalid arguments, judged against the tools the case offered), else None."""
     tools = {
         (t.get("function") or {}).get("name"): (t.get("function") or {}).get("parameters") or {}
         for t in case.get("tools") or []
@@ -469,13 +470,27 @@ def simulate_tool_result(case: dict[str, Any], call: ToolCallOutput) -> dict[str
             "fixture": False,
             "result": {"error": f"Invalid arguments: {errors[0].message[:200]}"},
         }
+    return None
+
+
+def simulate_tool_result(case: dict[str, Any], call: ToolCallOutput) -> dict[str, Any]:
+    """The fixture result for one tool call, or an error message for the model.
+
+    Order: unknown tool → error; malformed or schema-invalid arguments → error; a fixture whose
+    ``arguments`` equal the call's (by :func:`values_equal`) → its result; otherwise a fixture
+    for the tool with ``arguments: null`` (matches any call) → its result; otherwise an error.
+    """
+    problem = check_tool_call(case, call)
+    if problem is not None:
+        return problem
+    arguments = call.arguments or {}
     fixtures = [f for f in case.get("tool_results") or [] if f.get("name") == call.name]
     for f in fixtures:
         expected = f.get("arguments")
         if (
             expected is not None
-            and expected.keys() == call.arguments.keys()
-            and all(values_equal(v, call.arguments[k]) for k, v in expected.items())
+            and expected.keys() == arguments.keys()
+            and all(values_equal(v, arguments[k]) for k, v in expected.items())
         ):
             return {"ok": True, "fixture": True, "result": f.get("result")}
     for f in fixtures:
@@ -488,12 +503,20 @@ def simulate_tool_result(case: dict[str, Any], call: ToolCallOutput) -> dict[str
     }
 
 
-def needs_simulation(case: dict[str, Any], output: ModelOutput) -> bool:
+def needs_simulation(case: dict[str, Any], output: ModelOutput, mode: str = "simulated") -> bool:
+    """Whether tool calls in this output get answered: simulated mode needs fixtures, while
+    integration mode executes the declared tools."""
     return (
         case.get("type") == "tool_call"
         and bool(output.tool_calls)
-        and bool(case.get("tool_results"))
+        and (mode == "integration" or bool(case.get("tool_results")))
     )
 
 
-__all__ = ["EvaluationOutcome", "analyze", "simulate_tool_result", "tool_evaluators"]
+__all__ = [
+    "EvaluationOutcome",
+    "analyze",
+    "check_tool_call",
+    "simulate_tool_result",
+    "tool_evaluators",
+]

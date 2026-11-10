@@ -6,6 +6,15 @@ and port 8000.
 
 ## Conventions
 
+- **Authentication**: every route except `/health*`, `/version` and `/auth/providers`,
+  `/auth/login` and `/auth/negotiate` needs a signed-in user. Scripts send an API token as
+  `Authorization: Bearer oel_…`. The UI uses the `oel_session` cookie; with a cookie, requests
+  other than GET and HEAD must also send `X-OpenLLM-CSRF: 1`. GET and HEAD need the `viewer`
+  role, other methods `editor`, and `/users`, `/settings/auth` and `/audit` need `admin`.
+  Errors: `401 not_authenticated`, `403 forbidden`, `403 password_change_required` (only
+  `/auth/me`, `/auth/change-password` and `/auth/logout` work until the password is changed),
+  `403 csrf_failed`, `429 account_locked`.
+
 - **JSON** in and out. Dataset uploads also accept `multipart/form-data`.
 - **Pagination**: list endpoints take `limit` and `offset` and return
   `{"items": [...], "total": n, "limit": l, "offset": o}`.
@@ -15,7 +24,7 @@ and port 8000.
   {"error": {"code": "validation_error", "message": "…", "request_id": "…", "details": [{"loc": ["body", "load", "concurrency"], "msg": "…"}]}}
   ```
 
-  Status codes: `404` not found, `409` conflict (for example a duplicate name, or deleting a
+  Status codes: `401` not signed in, `403` not allowed, `404` not found, `409` conflict (for example a duplicate name, or deleting a
   dataset in use), `422` validation error, `503` not ready.
 - **Nulls**: a metric or score that could not be measured is `null`, with a reason in its
   `metadata`. It is never `0`.
@@ -26,8 +35,40 @@ and port 8000.
 | Method | Path | Description |
 |---|---|---|
 | GET | `/health` | Liveness, always 200 |
-| GET | `/health/ready` | Database, Redis, and worker heartbeat. Returns 503 when not ready |
+| GET | `/health/ready` | Database, Redis, and worker heartbeat. Returns 503 when not ready. With tool execution enabled, also `tool_runner` (informational) |
 | GET | `/version` | Framework and API versions |
+
+## Authentication
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/auth/providers` | Public. Which sign-in options to show: password, directory, Windows single sign-on |
+| POST | `/auth/login` | `{"username", "password"}` → the user (`/auth/me` shape), and sets the session cookie. Needs `X-OpenLLM-CSRF: 1` |
+| GET | `/auth/negotiate` | Kerberos (SPNEGO) sign-in: `401` with `WWW-Authenticate: Negotiate`, then the browser retries with a ticket |
+| POST | `/auth/logout` | End the current session |
+| GET | `/auth/me` | The signed-in user: `username`, `role`, `source`, `auth_method`, `must_change_password`, `auth_enabled` |
+| POST | `/auth/change-password` | `{"current_password", "new_password"}`; local accounts only. Ends your other sessions |
+| GET / POST | `/auth/tokens` | Your API tokens, or create one (`{"name", "expires_in_days"}`, null = never). The `token` is in the response only once |
+| DELETE | `/auth/tokens/{id}` | Revoke a token |
+
+## Users and authentication settings (admin)
+
+| Method | Path | Description |
+|---|---|---|
+| GET / POST | `/users` | List, or create a local user (`username`, `role`, optional `password`; without one, `initial_password` is generated and returned once) |
+| GET / PATCH / DELETE | `/users/{id}` | Read; change `display_name`, `email`, `role`, `role_pinned`, `disabled`; or delete. `409 last_admin` protects the last active administrator |
+| POST | `/users/{id}/reset-password` | Local users only. Returns `temporary_password` (unless one was given) and requires a change at the next sign-in |
+| DELETE | `/users/{id}/sessions` | Sign the user out everywhere |
+| GET / PUT | `/settings/auth` | LDAP/AD and Kerberos settings. Secrets are write-only: send `ldap.bind_password` / `kerberos.keytab_base64` to set them, `clear_…` to remove them; responses only say `bind_password_set` / `keytab_set` |
+| POST | `/settings/auth/test-connection` | Service bind and search-base check, with the saved or the submitted settings |
+| POST | `/settings/auth/test-user` | `{"username", "password"}` → the DN, groups and role the user would get; no session is created |
+| GET | `/audit` | Audit events (`actor`, `action`, `since`, `until`, `limit` ≤ 500, `offset`) |
+
+## Tools
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/tools/status` | Integration mode: `enabled` (TOOL_EXECUTION_ENABLED), `reachable`, `detail`, `registry_sha256`, `registry_error`, and the declared `tools` (name, description, version, kind, parameters, timeout, output limit). Read-only: tools come from `tools/tools.yaml` |
 
 ## Projects
 
@@ -168,8 +209,14 @@ are left out of `metrics` because their names repeat per length.
 Suites: `performance`, `answer_quality`, `structured_output`, `tool_calling`, `rag`,
 `hallucination`, and `context_window`. `quantization` is rejected with an explanation: compare
 runs of the same datasets on each variant instead. With `profile_id`, any field you leave out
-is taken from the profile. Unknown suites, `tool_mode: "integration"`, datasets without case types for a selected
+is taken from the profile. Unknown suites, datasets without case types for a selected
 quality suite, and a `judge` without the `rag` or `hallucination` suite are rejected with a 422.
+`tool_mode` is `simulated` (default), `generation_only`, or `integration`. Integration needs
+the tool sandbox: it is rejected with a 422 when `TOOL_EXECUTION_ENABLED` is off
+(`tool_execution_disabled`), when the runner is down (`tool_runner_unavailable`) or its
+`tools.yaml` is invalid (`tool_registry_invalid`), or when a tool offered by the datasets is not
+declared (`tools_not_registered`, with `details.missing_tools`). The snapshot's
+`evaluation.tool_registry` records the registry hash and the tool versions used.
 `judge` is optional (`null` by default); the snapshot's `evaluation.judge_endpoint` and
 `evidence_method` record what was used.
 

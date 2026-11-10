@@ -587,3 +587,37 @@ textarea.code, .code-block { font-family: ui-monospace, SFMono-Regular, Menlo, C
 
 /* Milestone 7: resource telemetry sparkline */
 .sparkline { color: var(--primary); display: block; }
+
+/* Milestone 8: sign-in, user box, settings */
+.auth-screen {
+  min-height: 100vh; display: grid; place-items: center; padding: 24px 16px;
+  background: var(--bg, #f5f6fb);
+}
+.auth-card { width: 100%; max-width: 420px; display: grid; gap: 14px; padding: 28px; }
+.auth-card h1 { font-size: 1.35rem; margin: 0; }
+.auth-brand { padding: 0; margin-bottom: 4px; }
+.auth-brand .brand-name { color: var(--text); }
+.auth-divider { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 0.78rem; }
+.auth-divider::before, .auth-divider::after { content: ""; flex: 1; border-top: 1px solid var(--border); }
+.form-grid { display: grid; gap: 14px; }
+.btn-link {
+  background: none; border: none; padding: 0; color: var(--primary); font: inherit;
+  font-size: 0.85rem; cursor: pointer; text-decoration: underline; justify-self: start;
+}
+.user-box { display: grid; gap: 6px; padding-bottom: 10px; border-bottom: 1px solid var(--nav-divider); margin-bottom: 4px; }
+.user-box .user-name { color: #fff; font-weight: 600; font-size: 0.85rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.user-box .user-meta { color: var(--nav-muted); font-size: 0.72rem; }
+.user-box .btn { justify-self: start; }
+.banner { margin: -24px -28px 20px; padding: 8px 28px; font-size: 0.82rem; }
+.banner-warn { background: #fff4e5; color: #8a4b00; border-bottom: 1px solid #f5d29a; }
+.banner-info { background: #eef1ff; color: #3a3f7a; border-bottom: 1px solid #d7dcff; }
+.secret-box {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.85rem;
+  background: var(--surface-muted, #f3f4f8); border: 1px dashed var(--border-strong);
+  border-radius: 8px; padding: 10px 12px; word-break: break-all; user-select: all;
+}
+.mapping-row { display: grid; grid-template-columns: minmax(0, 1fr) 140px auto; gap: 8px; align-items: center; }
+@media (max-width: 720px) {
+  .banner { margin: -16px -16px 16px; padding: 8px 16px; }
+  .mapping-row { grid-template-columns: minmax(0, 1fr); }
+}

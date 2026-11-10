@@ -6,6 +6,98 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added — Milestone 9 (sandboxed tool execution, spec §5.7 mode C)
+- **Integration mode** (`tool_mode: "integration"`, **Execute in sandbox** in the wizard). Tool
+  calls are executed by administrator-declared tools, and the model continues with the real
+  results. The same evaluators as in simulated mode apply. Follow-ups stay out of performance
+  metrics. The evaluation framework version is now `4`.
+- **Tool runner** (`python -m app.toolrunner.server`, Compose service `tool-runner`, profile
+  `tools`, `deploy.sh --tools`):
+  - executes the tools in `tools/tools.yaml`, which is reloaded when it changes;
+  - **script tools**: a fresh isolated Python process per call, with JSON on stdin and stdout,
+    an empty environment, a temporary working directory, a process group killed on timeout,
+    and CPU, memory, file-size and open-file limits;
+  - **HTTP tools** to allowlisted test services (`TOOL_ALLOWED_HOSTS`): no redirects, capped
+    responses, literal headers only.
+- Example tools: `calculator` (a safe arithmetic evaluator) and `lookup_order` (a read-only
+  fixture lookup), in `tools/tools.example.yaml` and `tools/scripts/`.
+- **Run creation checks** that tool execution is enabled, that the runner is reachable with a
+  valid registry, and that every tool offered by the datasets is declared. It returns a 422
+  naming any missing tools. The snapshot records the registry SHA-256 and the tool versions.
+- If the runner fails during a run, each tool call records its error, the model receives the
+  error, and the run continues.
+- `GET /tools/status`; readiness reports `tool_runner` when enabled. UI:
+  - **Settings → Tools** (admin): runner status, registry hash, declared tools;
+  - result detail shows **Executed tool calls**, with execution time and an *executed* or *not
+    executed* label for each call;
+  - the wizard option is disabled, with the reason, while the runner is unavailable.
+- Smoke test (with `--mock --tools` and `TOOL_EXECUTION_ENABLED=true`): an integration-mode run
+  where the mock model calls `calculator(6*7)` and the result `42` reaches the model.
+- Settings: `TOOL_EXECUTION_ENABLED`, `TOOL_RUNNER_TOKEN`, `TOOL_ALLOWED_HOSTS`, `TOOLS_FILE`,
+  `TOOL_SCRIPT_MEMORY_MB`, `TOOL_RUNNER_MAX_CONCURRENCY`, `TOOL_RUNNER_MEMORY`,
+  `TOOL_RUNNER_CPUS`.
+
+### Security — Milestone 9
+- The tool runner runs with a read-only filesystem and no capabilities, as a non-root user,
+  with process, memory and CPU limits. It has no Docker socket, no secrets, and only the
+  internal `tools` network.
+- Tools cannot be added through the UI or the API. Calls are authenticated with
+  `TOOL_RUNNER_TOKEN`, and arguments are validated against both the dataset schema and the
+  declared schema.
+
+### Added — Milestone 8 (authentication and roles)
+- **Sign-in required by default** (`AUTH_ENABLED=true`). Roles `viewer` (read, download
+  reports), `editor` (change endpoints, datasets, profiles, runs, reports, comparisons) and
+  `admin` (also users, authentication settings, audit log) are enforced centrally for every API
+  route. `AUTH_ENABLED=false` restores the old open behaviour, with a warning.
+- **Local accounts** with argon2id passwords and a password policy. A **bootstrap administrator**
+  (`ADMIN_USERNAME`, `ADMIN_INITIAL_PASSWORD`) is created when there are no users and must change
+  its password at the first sign-in. `deploy.sh` generates the password and `AUTH_SECRET_KEY`,
+  and prints the sign-in while the password is still the initial one.
+- **Active Directory / LDAP sign-in**, configured in Settings → Authentication:
+  - LDAPS or StartTLS, several servers, a private CA, a service bind, and a user search;
+  - `DOMAIN\user` and `user@domain` usernames;
+  - nested groups;
+  - group → role mappings (highest role wins), allowed groups, and a default role or `deny`,
+    re-evaluated at every sign-in unless an administrator pins the role;
+  - **Test connection** and **Test user** buttons.
+- **Windows single sign-on** (Kerberos/SPNEGO, optional): a service principal and an uploaded
+  keytab enable **Sign in with Windows**. The Docker image builds `gssapi`
+  (`WITH_KERBEROS=false` skips it).
+- **Sessions** in an HttpOnly cookie, with idle and absolute timeouts, a CSRF header and an
+  origin check. **API tokens** (`oel_…`) for scripts: shown once, can expire, revocable.
+- **Lockout** after repeated failed sign-ins, per username and per client address (Redis).
+- **Users** admin page: create local users, change and pin roles, disable, reset passwords, sign
+  out everywhere, delete. The last active administrator is protected.
+- **Audit log** of sign-ins, account, role, token and settings changes, and report downloads.
+- Runs record who started them ("Started by").
+- UI:
+  - sign-in and forced change-password pages;
+  - a user menu;
+  - a Settings page with Account (password, API tokens), Users, Authentication and Audit log
+    tabs;
+  - actions hidden for viewers.
+- CLI: `openllm-eval auth login / whoami / logout`. Every command sends the token from
+  `OPENLLM_API_TOKEN` or the token file.
+- Server CLI `python -m app.cli.admin` for recovery: `list-users`, `create-user`,
+  `reset-password`, `set-role`, `enable-user`, `delete-user`, `create-token`, `unlock`,
+  `disable-ldap`.
+- Smoke test:
+  - signs in with a temporary service token;
+  - checks that anonymous requests get 401;
+  - checks cookie sign-in through the UI proxy, the CSRF refusal, and the viewer 403;
+  - checks sign-out.
+- Migration `0008`: `users`, `user_sessions`, `api_tokens`, `auth_settings`, `audit_events`, and
+  `benchmark_runs.created_by_user_id`.
+
+### Security — Milestone 8
+- The LDAP bind password and the Kerberos keytab are encrypted at rest (AES-256-GCM, with a key
+  derived from `AUTH_SECRET_KEY`) and write-only in the API.
+- Session and token secrets are stored only as SHA-256 hashes. Logs redact session cookies,
+  `oel_` tokens and Negotiate headers.
+- nginx forwards `Authorization` and keeps an upstream `X-Forwarded-Proto`. The API trusts
+  `X-Forwarded-For` (`FORWARDED_ALLOW_IPS`; see SECURITY.md for the residual risk).
+
 ### Added — Milestone 7 (context-window and quantization experiments)
 - **Context-window suite** (`context_window`): cases carry the *requested* context length, and
   results are grouped by it. Per length: requests, success rate, overflow rate, out-of-memory

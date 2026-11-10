@@ -68,6 +68,9 @@ class BenchmarkRun(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     configuration_snapshot: Mapped[dict[str, Any]] = mapped_column(JSONType, nullable=False)
     framework_version: Mapped[str] = mapped_column(String(32), nullable=False)
     created_by: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     started_at: Mapped[datetime | None] = mapped_column(nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(nullable=True)
     cancel_requested_at: Mapped[datetime | None] = mapped_column(nullable=True)

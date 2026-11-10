@@ -22,10 +22,18 @@ dependencies = [
     "python-multipart>=0.0.18,<0.1",
     "jsonschema>=4.23,<5",
     "pyyaml>=6.0.2,<7",
+    "argon2-cffi>=23.1,<26",
+    "ldap3>=2.9.1,<2.10",
+    "cryptography>=43,<47",
 ]
 
 [project.scripts]
 openllm-eval = "app.cli.main:app"
+
+[project.optional-dependencies]
+kerberos = [
+    "gssapi>=1.9,<2",
+]
 
 [dependency-groups]
 dev = [
@@ -51,6 +59,12 @@ filterwarnings = [
     # uvicorn imports the legacy websockets API even with ws="none" (third-party, harmless).
     "ignore::DeprecationWarning:websockets.*",
     "ignore::DeprecationWarning:uvicorn.protocols.websockets.*",
+    # ldap3 2.9.1 imports pyasn1 names that pyasn1 0.6 deprecates (third-party, harmless).
+    "ignore:tagMap is deprecated:DeprecationWarning",
+    "ignore:typeMap is deprecated:DeprecationWarning",
+    # Windows only: asyncio's proactor subprocess transport is finalized after the test's event
+    # loop closed (CPython issue; the tool-runner tests start subprocesses).
+    "ignore:Exception ignored in.*BaseSubprocessTransport:pytest.PytestUnraisableExceptionWarning",
 ]
 
 [tool.ruff]

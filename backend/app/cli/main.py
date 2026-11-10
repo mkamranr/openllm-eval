@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import platform
 import time
 import uuid
 from pathlib import Path
@@ -24,6 +25,33 @@ app = typer.Typer(
 )
 
 DEFAULT_API_URL = "http://localhost:8000"
+
+
+# ------------------------------------------------------------------------------ authentication
+def token_file() -> Path:
+    """Where ``openllm-eval auth login`` stores the API token (mode 0600)."""
+    override = os.environ.get("OPENLLM_TOKEN_FILE")
+    if override:
+        return Path(override)
+    base = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
+    return Path(base) / "openllm-eval" / "token"
+
+
+def _token() -> str | None:
+    value = os.environ.get("OPENLLM_API_TOKEN", "").strip()
+    if value:
+        return value
+    try:
+        stored = token_file().read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    return stored or None
+
+
+def _auth() -> dict[str, Any]:
+    """Extra httpx arguments carrying the API token, when one is configured."""
+    token = _token()
+    return {"headers": {"Authorization": f"Bearer {token}"}} if token else {}
 
 
 @app.command()
@@ -46,7 +74,7 @@ def health(
     """Check API readiness (database, Redis, worker). Exits 1 if the API is not ready."""
     base = (api_url or os.environ.get("OPENLLM_API_URL") or DEFAULT_API_URL).rstrip("/")
     try:
-        response = httpx.get(f"{base}/api/v1/health/ready", timeout=timeout)
+        response = httpx.get(f"{base}/api/v1/health/ready", timeout=timeout, **_auth())
     except httpx.HTTPError as exc:
         typer.echo(f"error: could not reach API at {base}: {type(exc).__name__}", err=True)
         raise typer.Exit(code=2) from exc
@@ -84,7 +112,7 @@ def _base(api_url: str | None) -> str:
 def _request(method: str, url: str, timeout: float = 30.0, **kwargs: Any) -> Any:
     """Call the API; print a clean error and exit 1 (API error) or 2 (unreachable)."""
     try:
-        response = httpx.request(method, url, timeout=timeout, **kwargs)
+        response = httpx.request(method, url, timeout=timeout, **_auth(), **kwargs)
     except httpx.HTTPError as exc:
         typer.echo(f"error: could not reach API: {type(exc).__name__}", err=True)
         raise typer.Exit(code=2) from exc
@@ -96,6 +124,8 @@ def _request(method: str, url: str, timeout: float = 30.0, **kwargs: Any) -> Any
     if response.status_code >= 400:
         error = body.get("error", {}) if isinstance(body, dict) else {}
         typer.echo(f"error: {error.get('message', response.status_code)}", err=True)
+        if response.status_code == 401:
+            typer.echo("hint: run 'openllm-eval auth login' or set OPENLLM_API_TOKEN", err=True)
         raise typer.Exit(code=1)
     return body
 
@@ -362,7 +392,7 @@ def dataset_import(
     if label:
         payload["version_label"] = label
     try:
-        response = httpx.post(url, json=payload, timeout=300.0)
+        response = httpx.post(url, json=payload, timeout=300.0, **_auth())
     except httpx.HTTPError as exc:
         typer.echo(f"error: could not reach API: {type(exc).__name__}", err=True)
         raise typer.Exit(code=2) from exc
@@ -444,6 +474,7 @@ def _dataset_from_path(base: str, path: Path, name: str | None) -> dict[str, Any
             f"{base}/api/v1/datasets/{existing['id']}/versions",
             json={"content": content, "filename": path.name},
             timeout=300.0,
+            **_auth(),
         )
     except httpx.HTTPError as exc:
         typer.echo(f"error: could not reach API: {type(exc).__name__}", err=True)
@@ -671,7 +702,9 @@ def run_create(
         raise typer.Exit(code=1)
     payload = build_run_payload(base, data, config.parent)
     try:
-        response = httpx.request("POST", f"{base}/api/v1/runs", json=payload, timeout=60.0)
+        response = httpx.request(
+            "POST", f"{base}/api/v1/runs", json=payload, timeout=60.0, **_auth()
+        )
     except httpx.HTTPError as exc:
         typer.echo(f"error: could not reach API: {type(exc).__name__}", err=True)
         raise typer.Exit(code=2) from exc
@@ -776,7 +809,7 @@ REPORT_FORMATS = ("html", "json", "csv", "metrics_csv", "markdown")
 
 def _download_bytes(url: str, **params: Any) -> bytes:
     try:
-        response = httpx.get(url, params=params, timeout=120.0)
+        response = httpx.get(url, params=params, timeout=120.0, **_auth())
     except httpx.HTTPError as exc:
         typer.echo(f"error: could not reach API: {type(exc).__name__}", err=True)
         raise typer.Exit(code=2) from exc
@@ -984,6 +1017,118 @@ def run_rerun(
         run = _wait(base, run["id"], interval, quiet=False)
         _print_metrics(base, run)
         _exit_for(run["status"])
+
+
+# ------------------------------------------------------------------------------------ auth
+auth_app = typer.Typer(help="Sign in and manage the stored API token.", no_args_is_help=True)
+app.add_typer(auth_app, name="auth")
+
+CSRF = {"X-OpenLLM-CSRF": "1"}
+
+
+def _api_error(response: httpx.Response) -> str:
+    try:
+        return str(response.json().get("error", {}).get("message") or response.status_code)
+    except ValueError:
+        return f"HTTP {response.status_code}"
+
+
+def _save_token(token: str) -> Path:
+    path = token_file()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(token + "\n")
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+    return path
+
+
+@auth_app.command("login")
+def auth_login(
+    username: str = typer.Option(..., "--username", "-u", prompt=True),
+    password: str = typer.Option(..., "--password", prompt=True, hide_input=True),
+    days: int = typer.Option(90, "--days", help="Token lifetime in days (0 = never expires)."),
+    api_url: str = typer.Option(None, "--api-url", help=API_URL_HELP),
+) -> None:
+    """Sign in with your username and password (local or Windows/AD) and store an API token.
+
+    The token goes to ~/.config/openllm-eval/token (mode 0600); OPENLLM_API_TOKEN overrides it.
+    """
+    base = _base(api_url)
+    try:
+        with httpx.Client(base_url=base, timeout=30.0, headers=CSRF) as client:
+            response = client.post(
+                "/api/v1/auth/login", json={"username": username, "password": password}
+            )
+            if response.status_code != 200:
+                typer.echo(f"error: {_api_error(response)}", err=True)
+                raise typer.Exit(code=1)
+            if response.json().get("must_change_password"):
+                client.post("/api/v1/auth/logout")
+                typer.echo(
+                    "error: you must change your password first; sign in to the web UI.", err=True
+                )
+                raise typer.Exit(code=1)
+            created = client.post(
+                "/api/v1/auth/tokens",
+                json={
+                    "name": f"cli ({platform.node() or 'unknown host'})"[:100],
+                    "expires_in_days": days or None,
+                },
+            )
+            client.post("/api/v1/auth/logout")
+    except httpx.HTTPError as exc:
+        typer.echo(f"error: could not reach API at {base}: {type(exc).__name__}", err=True)
+        raise typer.Exit(code=2) from exc
+    if created.status_code != 201:
+        typer.echo(f"error: {_api_error(created)}", err=True)
+        raise typer.Exit(code=1)
+    path = _save_token(created.json()["token"])
+    typer.echo(f"Signed in as {username}; token saved to {path}")
+
+
+@auth_app.command("logout")
+def auth_logout(api_url: str = typer.Option(None, "--api-url", help=API_URL_HELP)) -> None:
+    """Revoke the stored API token and delete the token file."""
+    path = token_file()
+    try:
+        token = path.read_text(encoding="utf-8").strip()
+    except OSError:
+        typer.echo("Not signed in (no token file).")
+        return
+    base = _base(api_url)
+    headers = {"Authorization": f"Bearer {token}"}
+    try:
+        listing = httpx.get(f"{base}/api/v1/auth/tokens", headers=headers, timeout=30.0)
+        if listing.status_code == 200:
+            for item in listing.json():
+                if token.startswith(item["prefix"]) and item["revoked_at"] is None:
+                    httpx.delete(
+                        f"{base}/api/v1/auth/tokens/{item['id']}", headers=headers, timeout=30.0
+                    )
+    except httpx.HTTPError:
+        typer.echo("warning: could not reach the API; the token was not revoked.", err=True)
+    path.unlink(missing_ok=True)
+    typer.echo("Signed out.")
+
+
+@auth_app.command("whoami")
+def auth_whoami(
+    api_url: str = typer.Option(None, "--api-url", help=API_URL_HELP),
+    as_json: bool = typer.Option(False, "--json", help="Print JSON output."),
+) -> None:
+    """Show the account the CLI is using."""
+    me = _request("GET", f"{_base(api_url)}/api/v1/auth/me")
+    if as_json:
+        typer.echo(json.dumps(me, indent=2))
+        return
+    if not me.get("auth_enabled"):
+        typer.echo("Authentication is disabled on this server (everyone is an administrator).")
+        return
+    typer.echo(f"{me['username']} ({me['role']}, via {me['auth_method']})")
 
 
 if __name__ == "__main__":

@@ -146,6 +146,8 @@ export interface Run {
   status: RunStatus;
   suites: string[];
   framework_version: string;
+  /** Who started the run (null for runs created before sign-in existed). */
+  created_by?: string | null;
   created_at: string;
   updated_at: string;
   started_at: string | null;
@@ -189,7 +191,7 @@ export interface RunCreate {
 
 // ------------------------------------------------------------------- evaluation (Milestone 4)
 
-export type ToolMode = "simulated" | "generation_only";
+export type ToolMode = "simulated" | "generation_only" | "integration";
 
 export interface EvaluationConfig {
   tool_mode: ToolMode;
@@ -280,7 +282,18 @@ export interface ProfileInput {
 
 export interface SimulationRound {
   round: number;
-  tool_results: { name: string | null; arguments: unknown; fixture_matched: boolean; valid: boolean; result: string }[];
+  tool_results: {
+    name: string | null;
+    arguments: unknown;
+    fixture_matched: boolean;
+    valid: boolean;
+    result: string;
+    /** Integration mode only. */
+    executed?: boolean;
+    duration_ms?: number | null;
+    error?: string | null;
+    truncated?: boolean;
+  }[];
   latency_ms: number | null;
   ok: boolean;
   error: string | null;
@@ -288,8 +301,8 @@ export interface SimulationRound {
 }
 
 export interface Simulation {
-  mode: "simulated";
-  executed: false;
+  mode: "simulated" | "integration";
+  executed: boolean;
   completed: boolean;
   rounds: SimulationRound[];
   final_content: string | null;

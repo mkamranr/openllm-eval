@@ -36,6 +36,7 @@ import {
   DEFAULT_QUALITY,
   QUALITY_TYPES,
   QualitySettingsForm,
+  TOOL_MODE_LABELS,
   fromEvaluationConfig,
   toEvaluationConfig,
   validateQuality,
@@ -496,7 +497,7 @@ function ReviewStep({
                 <dd>
                   {quality.map((k) => evaluationType(k)?.title ?? k).join(", ")}
                   {quality.includes("tool_calling") &&
-                    ` · tools ${draft.quality.toolMode === "simulated" ? "simulated (fixtures)" : "inspected only"}`}
+                    ` · tools ${TOOL_MODE_LABELS[draft.quality.toolMode]}`}
                   {embedding && ` · embeddings via ${embedding.name}`}
                   {quality.some((k) => k === "rag" || k === "hallucination") &&
                     ` · evidence ${judge ? `judged by ${judge.name}` : "checked lexically"}`}

@@ -15,8 +15,12 @@ bash scripts/deploy.sh
 API, the worker, and the UI, and runs `scripts/smoke-test.sh`. Open http://localhost:3000. The
 dashboard shows the status of the API, the database, Redis, and the worker.
 
-> There is no authentication yet. Keep `BIND_ADDRESS=127.0.0.1`, or only expose the stack on a
-> trusted network.
+On a first install, `deploy.sh` ends by printing the administrator's sign-in:
+`admin` and a generated password. Sign in, and choose a new password. Then add users under
+Settings → Users, or connect Active Directory under Settings → Authentication. See
+[Authentication and roles](authentication.md).
+
+For the CLI, run `openllm-eval auth login` once; it stores an API token for later commands.
 
 ## 2. Connect a model endpoint
 

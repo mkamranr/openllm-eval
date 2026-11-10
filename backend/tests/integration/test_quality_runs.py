@@ -381,7 +381,10 @@ async def test_embedding_similarity_through_an_embedding_endpoint(
     [
         ({"suites": ["tool_calling"]}, "tool_call"),
         ({"suites": ["quantization"]}, "compared across runs"),
-        ({"suites": ["answer_quality"], "evaluation": {"tool_mode": "integration"}}, "mode C"),
+        (
+            {"suites": ["answer_quality"], "evaluation": {"tool_mode": "execute"}},
+            "tool_mode must be",
+        ),
         (
             {"suites": ["answer_quality"], "evaluation": {"disabled_evaluators": ["nope"]}},
             "Unknown evaluator",

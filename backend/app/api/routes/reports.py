@@ -5,11 +5,12 @@ from __future__ import annotations
 import uuid
 from typing import Literal
 
-from fastapi import APIRouter, Depends, Query, Response, status
+from fastapi import APIRouter, Depends, Query, Request, Response, status
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_app_settings, get_redis, get_session
+from app.auth.dependencies import Principal, get_principal
 from app.core.config import Settings
 from app.core.exceptions import AppError
 from app.execution.queue import notify_run_queued
@@ -24,7 +25,7 @@ from app.schemas.report import (
     ReportRead,
 )
 from app.schemas.run import RunDetail
-from app.services import report_service, run_service
+from app.services import audit_service, report_service, run_service
 
 router = APIRouter(tags=["reports"])
 
@@ -90,10 +91,23 @@ async def get_report(
 @router.get("/reports/{report_id}/download")
 async def download_report(
     report_id: uuid.UUID,
+    request: Request,
     inline: bool = False,
     session: AsyncSession = Depends(get_session),
+    principal: Principal = Depends(get_principal),
 ) -> Response:
     report = await report_service.get_report(session, report_id)
+    if principal.user is not None:
+        audit_service.record(
+            session,
+            "report_downloaded",
+            actor_id=principal.user_id,
+            actor_name=principal.username,
+            target=report.filename,
+            request=request,
+            details={"report_id": str(report.id), "run_id": str(report.run_id)},
+        )
+        await session.commit()
     return _download(report.content, report.media_type, report.filename, inline)
 
 
@@ -111,8 +125,15 @@ async def rerun(
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_app_settings),
     redis: Redis = Depends(get_redis),
+    principal: Principal = Depends(get_principal),
 ) -> RunDetail:
-    run = await report_service.rerun(session, settings, run_id)
+    run = await report_service.rerun(
+        session,
+        settings,
+        run_id,
+        created_by=principal.username,
+        created_by_user_id=principal.user_id,
+    )
     await notify_run_queued(redis, run.id)
     return run_service.to_detail(run)
 

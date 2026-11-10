@@ -14,6 +14,21 @@ import type {
   ValidationDetail,
   ValidationResult,
 } from "../types/api";
+import type {
+  ApiToken,
+  ApiTokenCreated,
+  AuditEvent,
+  AuthSettings,
+  DirectoryTestResult,
+  KerberosSettingsInput,
+  LdapSettingsInput,
+  Me,
+  Providers,
+  Role,
+  User,
+  UserCreated,
+} from "../types/auth";
+import type { ToolsStatus } from "../types/tools";
 import type { ReadinessResponse, VersionResponse } from "../types/health";
 import type { ComparisonResult, Report, ReportCreate, SavedComparison } from "../types/reports";
 import type {
@@ -66,6 +81,17 @@ export class ApiError extends Error {
   }
 }
 
+/** Sent with every change; cross-site pages cannot set it, so cookie sessions are CSRF-safe. */
+export const CSRF_HEADER = "X-OpenLLM-CSRF";
+
+/** Fired when the server says the session is gone (401) or a password change is due (403). */
+export const AUTH_EVENT = "openllm:auth";
+export type AuthEventDetail = "signed-out" | "password-change-required";
+
+function announce(detail: AuthEventDetail) {
+  window.dispatchEvent(new CustomEvent<AuthEventDetail>(AUTH_EVENT, { detail }));
+}
+
 async function request<T>(
   path: string,
   init: RequestInit = {},
@@ -73,8 +99,11 @@ async function request<T>(
 ): Promise<T> {
   const headers: Record<string, string> = { Accept: "application/json" };
   if (init.body !== undefined) headers["Content-Type"] = "application/json";
+  const method = (init.method ?? "GET").toUpperCase();
+  if (method !== "GET" && method !== "HEAD") headers[CSRF_HEADER] = "1";
   const response = await fetch(`${API_BASE}${path}`, {
     ...init,
+    credentials: "same-origin",
     headers: { ...headers, ...(init.headers as Record<string, string> | undefined) },
   });
   if (response.status === 204) return undefined as T;
@@ -87,7 +116,12 @@ async function request<T>(
   if (!response.ok && !okStatuses.includes(response.status)) {
     const message =
       (body as ApiErrorBody | undefined)?.error?.message ?? `HTTP ${response.status}`;
-    throw new ApiError(message, response.status, body);
+    const error = new ApiError(message, response.status, body);
+    if (!path.startsWith("/auth/")) {
+      if (response.status === 401 && error.code === "not_authenticated") announce("signed-out");
+      if (response.status === 403 && error.code === "password_change_required") announce("password-change-required");
+    }
+    throw error;
   }
   if (body === undefined) {
     throw new ApiError("Invalid JSON response", response.status);
@@ -110,6 +144,47 @@ function query(params: Record<string, string | number | boolean | undefined | nu
 }
 
 export const api = {
+  auth: {
+    providers: () => request<Providers>("/auth/providers"),
+    me: () => request<Me>("/auth/me"),
+    login: (username: string, password: string) =>
+      request<Me>("/auth/login", json("POST", { username, password })),
+    /** Windows single sign-on: the browser answers the Negotiate challenge by itself. */
+    negotiate: () => request<Me>("/auth/negotiate"),
+    logout: () => request<void>("/auth/logout", { method: "POST" }),
+    changePassword: (current_password: string, new_password: string) =>
+      request<void>("/auth/change-password", json("POST", { current_password, new_password })),
+    tokens: () => request<ApiToken[]>("/auth/tokens"),
+    createToken: (name: string, expires_in_days: number | null) =>
+      request<ApiTokenCreated>("/auth/tokens", json("POST", { name, expires_in_days })),
+    revokeToken: (id: string) => request<void>(`/auth/tokens/${id}`, { method: "DELETE" }),
+  },
+
+  users: {
+    list: (q?: string) => request<Page<User>>(`/users${query({ q, limit: 500 })}`),
+    create: (data: { username: string; display_name?: string | null; email?: string | null; role: Role; password?: string | null; must_change_password?: boolean }) =>
+      request<UserCreated>("/users", json("POST", data)),
+    update: (id: string, data: Partial<{ display_name: string | null; email: string | null; role: Role; role_pinned: boolean; disabled: boolean }>) =>
+      request<User>(`/users/${id}`, json("PATCH", data)),
+    remove: (id: string) => request<void>(`/users/${id}`, { method: "DELETE" }),
+    resetPassword: (id: string) =>
+      request<{ temporary_password: string | null; must_change_password: boolean }>(`/users/${id}/reset-password`, json("POST", {})),
+    signOutEverywhere: (id: string) => request<void>(`/users/${id}/sessions`, { method: "DELETE" }),
+  },
+
+  authSettings: {
+    get: () => request<AuthSettings>("/settings/auth"),
+    save: (ldap: LdapSettingsInput, kerberos: KerberosSettingsInput) =>
+      request<AuthSettings>("/settings/auth", json("PUT", { ldap, kerberos })),
+    testConnection: (ldap: LdapSettingsInput) =>
+      request<DirectoryTestResult>("/settings/auth/test-connection", json("POST", { ldap })),
+    testUser: (ldap: LdapSettingsInput, username: string, password: string | null) =>
+      request<DirectoryTestResult>("/settings/auth/test-user", json("POST", { ldap, username, password })),
+  },
+
+  audit: (params: { actor?: string; action?: string; limit?: number; offset?: number } = {}) =>
+    request<Page<AuditEvent>>(`/audit${query({ limit: 100, ...params })}`),
+
   /** Readiness returns 503 with a full body when degraded; treat that as data, not an error. */
   readiness: () => request<ReadinessResponse>("/health/ready", {}, [503]),
   version: () => request<VersionResponse>("/version"),
@@ -270,5 +345,9 @@ export const api = {
     create: (data: ProfileInput) => request<Profile>("/profiles", json("POST", data)),
     update: (id: string, data: Partial<ProfileInput>) => request<Profile>(`/profiles/${id}`, json("PATCH", data)),
     remove: (id: string) => request<void>(`/profiles/${id}`, { method: "DELETE" }),
+  },
+
+  tools: {
+    status: () => request<ToolsStatus>("/tools/status"),
   },
 };

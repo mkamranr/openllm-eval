@@ -13,7 +13,7 @@ from app.evaluators.tools import tool_evaluators
 
 # Bumped when the registry's composition or shared normalization changes.
 # 3: context_window suite (Milestone 7).
-EVALUATION_FRAMEWORK_VERSION = "3"
+EVALUATION_FRAMEWORK_VERSION = "4"
 
 QUALITY_SUITES = (
     "answer_quality",

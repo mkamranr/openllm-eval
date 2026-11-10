@@ -29,6 +29,7 @@ import {
   Tabs,
   formatRelative,
 } from "../../components/ui";
+import { useCanEdit } from "../../auth/AuthContext";
 import { api } from "../../services/api";
 import type { Page } from "../../types/api";
 import type {
@@ -497,6 +498,7 @@ function ConfigurationCard({ run }: { run: RunDetail }) {
   return (
     <Card title="Configuration & methodology" icon={Settings2}>
       <dl className="kv">
+        {run.created_by && <><dt>Started by</dt><dd>{run.created_by}</dd></>}
         <dt>Datasets</dt>
         <dd>
           {run.datasets.map((d) => (
@@ -563,6 +565,7 @@ function ConfigurationCard({ run }: { run: RunDetail }) {
 // ---------------------------------------------------------------------------------- page
 
 export function RunDetailPage() {
+  const canEdit = useCanEdit();
   const { runId = "" } = useParams();
   const navigate = useNavigate();
   const [run, setRun] = useState<RunDetail>();
@@ -691,13 +694,13 @@ export function RunDetailPage() {
         description={run.description ?? `Created ${formatRelative(run.created_at)} · ${run.models.length} model${multi ? "s" : ""} · ${run.datasets.map((d) => d.name).join(", ")}`}
         actions={
           <>
-            {canCancel && (
+            {canEdit && canCancel && (
               <button type="button" className="btn" disabled={busy || run.status === "cancel_requested"}
                 onClick={() => void act(() => api.runs.cancel(runId), "Cancellation requested.")}>
                 <Square size={16} /> {run.status === "cancel_requested" ? "Cancelling…" : "Cancel run"}
               </button>
             )}
-            {canRetry && (
+            {canEdit && canRetry && (
               <button type="button" className="btn" disabled={busy}
                 onClick={() => void act(() => api.runs.retryFailed(runId), "Queued: failed and unfinished requests will be retried.")}>
                 <RotateCcw size={16} /> Retry failed
@@ -708,13 +711,13 @@ export function RunDetailPage() {
                 <Link className="btn" to={`/compare?runs=${run.id}`}>
                   <GitCompare size={16} /> Compare
                 </Link>
-                <button type="button" className="btn" disabled={busy} onClick={() => void rerun()}
+                {canEdit && <button type="button" className="btn" disabled={busy} onClick={() => void rerun()}
                   title="Create a new run with the same endpoints, dataset versions, and settings">
                   <Copy size={16} /> Re-run
-                </button>
+                </button>}
               </>
             )}
-            {!canCancel && (
+            {canEdit && !canCancel && (
               <button type="button" className="btn btn-danger-ghost" disabled={busy} onClick={() => setConfirmDelete(true)}
                 aria-label={`Delete ${run.name}`}>
                 <Trash2 size={16} /> Delete

@@ -10,6 +10,7 @@ import {
   Switch,
   formatRelative,
 } from "../../components/ui";
+import { useCanEdit } from "../../auth/AuthContext";
 import { useAsync } from "../../hooks/useAsync";
 import { ApiError, api } from "../../services/api";
 import type { Project } from "../../types/api";
@@ -92,6 +93,7 @@ function ProjectForm({ onSaved, onClose }: { onSaved: (p: Project) => void; onCl
 }
 
 export function ProjectsPage() {
+  const canEdit = useCanEdit();
   const [showArchived, setShowArchived] = useState(false);
   const projects = useAsync(
     () => api.projects.list({ include_archived: showArchived }),
@@ -121,9 +123,11 @@ export function ProjectsPage() {
         actions={
           <>
             <Switch checked={showArchived} onChange={setShowArchived} label="Show archived" />
-            <button type="button" className="btn btn-primary" onClick={() => setCreating(true)}>
-              <Plus size={16} /> New project
-            </button>
+            {canEdit && (
+              <button type="button" className="btn btn-primary" onClick={() => setCreating(true)}>
+                <Plus size={16} /> New project
+              </button>
+            )}
           </>
         }
       />

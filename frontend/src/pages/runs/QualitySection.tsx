@@ -336,12 +336,22 @@ export function ClaimTable({ claims }: { claims: Claim[] }) {
 }
 
 export function SimulationView({ simulation }: { simulation: Simulation }) {
+  const executed = simulation.mode === "integration";
   return (
     <div>
-      <h3 style={{ margin: "8px 0" }}>Simulated tool execution</h3>
+      <h3 style={{ margin: "8px 0" }}>{executed ? "Executed tool calls" : "Simulated tool execution"}</h3>
       <p className="small muted" style={{ marginTop: 0 }}>
-        Nothing was executed. Each call was validated against the tool&apos;s schema and answered with the dataset&apos;s
-        fixture result (or an error), then the model was asked to continue.
+        {executed ? (
+          <>
+            Integration mode. Each valid call was executed by the declared tool in the isolated tool runner, and the
+            model continued with the real result (or the error).
+          </>
+        ) : (
+          <>
+            Nothing was executed. Each call was validated against the tool&apos;s schema and answered with the
+            dataset&apos;s fixture result (or an error), then the model was asked to continue.
+          </>
+        )}
       </p>
       <ol className="eval-list">
         {simulation.rounds.map((r) => (
@@ -354,10 +364,16 @@ export function SimulationView({ simulation }: { simulation: Simulation }) {
               <div key={i} className="small">
                 <span className="mono">{t.name}({typeof t.arguments === "string" ? t.arguments : JSON.stringify(t.arguments)})</span>
                 {" → "}
-                <span className={t.fixture_matched ? "" : "fail"} style={t.fixture_matched ? undefined : { color: "var(--danger)" }}>
+                <span className={t.valid ? "" : "fail"} style={t.valid ? undefined : { color: "var(--danger)" }}>
                   {t.result}
                 </span>
                 {t.fixture_matched ? <span className="badge badge-neutral" style={{ marginLeft: 6 }}>fixture</span> : null}
+                {executed && t.executed ? (
+                  <span className="badge badge-info" style={{ marginLeft: 6 }}>executed · {fmtMs(t.duration_ms ?? null)}</span>
+                ) : null}
+                {executed && !t.executed ? (
+                  <span className="badge badge-warn" style={{ marginLeft: 6 }}>not executed</span>
+                ) : null}
               </div>
             ))}
           </li>

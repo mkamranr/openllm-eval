@@ -34,10 +34,11 @@ produced it. Everything runs on your own infrastructure: no telemetry, no CDN, n
 | **Answer quality** | Exact, normalized, contains-reference, and token-F1 matching; a refusal heuristic for safety cases; optional embedding similarity. |
 | **Structured output** | JSON validity, JSON Schema (Draft 2020-12) conformance with violation paths, and expected-field match. |
 | **RAG and hallucination** | Faithfulness, citation precision and recall, context relevance, precision and recall, and abstention on unanswerable questions. Every claim is classified as supported, unsupported, contradicted, or unverifiable, with its evidence and source. Lexical by default; an LLM judge is optional. |
-| **Tool calling** | Tool selection measured separately from argument correctness; call precision and recall; invented-tool and malformed-argument rates; and **simulated** tool results from dataset fixtures, so final answers can be checked without executing anything. |
+| **Tool calling** | Tool selection measured separately from argument correctness; call precision and recall; invented-tool and malformed-argument rates; **simulated** tool results from dataset fixtures, so final answers can be checked without executing anything; and an opt-in **sandboxed integration mode** that executes administrator-declared tools in an isolated container. |
 | **Runs** | A background worker with a database-backed queue and leases, live progress over SSE, cancel and retry-failed, and an immutable, secret-free configuration snapshot for every run. |
 | **Reports and comparison** | An offline HTML report (charts, every metric, failures, configuration, methodology, reproduction steps), JSON, CSV, and Markdown exports, and side-by-side run comparison that flags every configuration difference, labels comparability, and lists per-case regressions. One-click re-run. |
 | **Profiles** | Reusable evaluation settings, available from the UI, the API, and the CLI. |
+| **Access control** | Sign-in with local accounts or Active Directory (LDAP/LDAPS, optional Windows single sign-on via Kerberos), viewer / editor / admin roles from AD group mappings, API tokens for the CLI, sign-in lockout, and an audit log. |
 | **Interfaces** | A web UI (dashboard, New Evaluation wizard, run explorer, reports, comparison), a REST API with OpenAPI, and the `openllm-eval` CLI with YAML run configs. |
 
 Missing measurements are always reported as unavailable, with a reason, and never as `0`.
@@ -50,6 +51,8 @@ Requirements: Docker with Compose v2.
 cp .env.example .env              # set POSTGRES_PASSWORD (and BIND_ADDRESS=0.0.0.0 for remote access)
 bash scripts/deploy.sh            # builds, migrates, starts, and runs the smoke test
 ```
+
+The first deploy prints the `admin` password; you choose a new one at the first sign-in.
 
 | | URL |
 |---|---|
@@ -68,7 +71,8 @@ bash scripts/deploy.sh --mock
 Then open **New Evaluation**, pick the endpoint, select *Performance* and *Answer quality*, add
 the *Sample: general Q&A* dataset, and start the run.
 
-**Upgrading:** unpack a new release into any folder, copy `.env` (and `secrets.env`) across, and
+**Upgrading:** unpack a new release into any folder, copy `.env` (and `secrets.env`, and
+`tools/tools.yaml` if you use the tool sandbox) across, and
 run `bash scripts/deploy.sh`. The script stops the previous install's containers, keeps the data
 volumes, and applies the database migrations.
 
@@ -93,6 +97,7 @@ load:
 ```
 
 ```bash
+openllm-eval auth login -u alice      # once: stores an API token
 openllm-eval run create --config bench.yaml --wait
 openllm-eval run results <run-id>
 ```
@@ -115,6 +120,8 @@ and served by nginx. See the [architecture overview](docs/architecture/overview.
 |---|---|
 | [User guide](docs/user-guide/getting-started.md) | Endpoints, datasets, runs, quality evaluation, and profiles, step by step |
 | [Dataset format](docs/user-guide/datasets.md) | Case types, fields, and JSONL/CSV examples |
+| [Authentication](docs/user-guide/authentication.md) | Users, roles, Active Directory, Windows single sign-on |
+| [Tool sandbox](docs/user-guide/tool-sandbox.md) | Executing tool calls in integration mode |
 | [Configuration](docs/reference/configuration.md) | Every `.env` setting |
 | [CLI reference](docs/reference/cli.md) | `openllm-eval` commands and the run config format |
 | [API reference](docs/reference/api.md) | REST endpoints, errors, and streaming events |
@@ -131,6 +138,8 @@ and served by nginx. See the [architecture overview](docs/architecture/overview.
 - [x] **M5** RAG and evidence evaluation, optional LLM judge, hallucination indicators
 - [x] **M6** Run comparison, reports, and exports
 - [x] **M7** Quantization and context-window studies
+- [x] **M8** Authentication: local and Active Directory accounts, Windows single sign-on, roles, audit log
+- [x] **M9** Sandboxed tool execution (integration mode)
 
 See the [CHANGELOG](CHANGELOG.md) for details.
 

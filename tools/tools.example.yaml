@@ -1,0 +1,66 @@
+# Tools for integration-mode runs (spec §5.7 mode C). Copy to tools.yaml and edit.
+#
+# Only tools declared here can run, and only inside the tool-runner container. They cannot be
+# added from the UI or the API. Review every change to this file and to scripts/ like code.
+#
+# Each tool:
+#   name              must match the function name the model calls (letters, digits, _ and -)
+#   description       shown in Settings > Tools
+#   version           recorded with every run that uses the tool; bump it when behaviour changes
+#   parameters        JSON Schema for the arguments; calls that do not match are rejected
+#   timeout_seconds   at most 60 (default 10)
+#   max_output_bytes  at most 1048576 (default 65536)
+#   kind: script      script: path under this directory. The script reads the arguments as JSON
+#                     on stdin and prints one JSON value on stdout. It runs in a fresh process with
+#                     no environment, no internet (only the internal tools network), a temporary working
+#                     directory, and CPU, memory and file-size limits.
+#   kind: http        http: {url, method: POST|GET, headers}. POST sends the arguments as a JSON
+#                     body, GET as query parameters. The host must be in TOOL_ALLOWED_HOSTS, and
+#                     the tool-runner container must be attached to that service's network.
+#                     Headers must be literal, non-secret values.
+
+tools:
+  - name: calculator
+    description: Evaluates an arithmetic expression (+ - * / ** % and parentheses).
+    version: "1"
+    kind: script
+    script: scripts/calculator.py
+    timeout_seconds: 5
+    parameters:
+      type: object
+      properties:
+        expression:
+          type: string
+          maxLength: 200
+      required: [expression]
+      additionalProperties: false
+
+  - name: lookup_order
+    description: Looks up an order by its id in a read-only test fixture.
+    version: "1"
+    kind: script
+    script: scripts/lookup_order.py
+    timeout_seconds: 5
+    parameters:
+      type: object
+      properties:
+        order_id:
+          type: string
+          pattern: "^[A-Z0-9-]{1,20}$"
+      required: [order_id]
+      additionalProperties: false
+
+  # An HTTP tool calling a test service. Requires TOOL_ALLOWED_HOSTS=inventory-test and the
+  # tool-runner attached to the network inventory-test is on (see docs/user-guide/tool-sandbox.md).
+  # - name: check_stock
+  #   description: Stock level for a product, from the inventory test service.
+  #   version: "1"
+  #   kind: http
+  #   http:
+  #     url: http://inventory-test:8080/stock
+  #     method: POST
+  #   parameters:
+  #     type: object
+  #     properties:
+  #       sku: {type: string}
+  #     required: [sku]

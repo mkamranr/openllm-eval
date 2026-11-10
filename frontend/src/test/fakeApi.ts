@@ -1,5 +1,6 @@
 import { vi } from "vitest";
 
+import type { Me, Role } from "../types/auth";
 import type { Dataset, DatasetVersion, Endpoint, Project } from "../types/api";
 import type { CaseResult, MetricValue, Profile, RunDetail, RunModel } from "../types/runs";
 
@@ -269,6 +270,31 @@ export function makeResult(overrides: Partial<CaseResult> = {}): CaseResult {
     completed_at: "2026-11-01T00:00:02Z",
     truncated: false,
     evaluations: [],
+    ...overrides,
+  };
+}
+
+export function makeMe(role: Role = "admin", overrides: Partial<Me> = {}): Me {
+  return {
+    auth_enabled: true,
+    auth_method: "session",
+    username: "ada",
+    role,
+    must_change_password: false,
+    user: {
+      id: "u1",
+      username: "ada",
+      display_name: "Ada Admin",
+      email: null,
+      source: "local",
+      role,
+      role_pinned: false,
+      must_change_password: false,
+      disabled: false,
+      groups: [],
+      last_login_at: null,
+      created_at: "2026-11-01T00:00:00Z",
+    },
     ...overrides,
   };
 }

@@ -28,6 +28,11 @@ class ReadinessResponse(BaseModel):
     database: ComponentStatus
     redis: ComponentStatus
     worker: WorkerStatus
+    # False means every request is treated as an administrator (AUTH_ENABLED=false).
+    auth_enabled: bool = True
+    # Integration-mode tool runner; null when TOOL_EXECUTION_ENABLED=false. Informational: it
+    # does not affect readiness.
+    tool_runner: ComponentStatus | None = None
 
 
 class VersionResponse(BaseModel):

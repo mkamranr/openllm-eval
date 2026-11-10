@@ -3,6 +3,8 @@
 .env.*
 !.env.example
 secrets.env
+# The tool sandbox registry is server-specific (deploy.sh --tools creates it from the example)
+/tools/tools.yaml
 
 # Python
 __pycache__/

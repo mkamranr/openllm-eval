@@ -3,9 +3,12 @@
 #
 #   bash scripts/deploy.sh                 # install or upgrade, then run the smoke test
 #   bash scripts/deploy.sh --mock          # also start the mock model server
+#   bash scripts/deploy.sh --tools         # also start the sandboxed tool runner (integration mode)
 #
 # Options:
 #   --mock                     start the mock-llm service (same as --profile mock)
+#   --tools                    start the tool-runner service (same as --profile tools); needs
+#                              TOOL_EXECUTION_ENABLED=true in .env to be used by runs
 #   --profile NAME             enable a Compose profile (repeatable)
 #   --take-data-from PROJECT   replace this install's database with the one from an older
 #                              Compose project (this install's data is backed up first)
@@ -33,6 +36,7 @@ usage() { sed -n '2,/^set -euo/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; }
 while (($#)); do
   case "$1" in
     --mock) profiles+=(--profile mock) ;;
+    --tools) profiles+=(--profile tools) ;;
     --profile) profiles+=(--profile "${2:?--profile needs a name}"); shift ;;
     --take-data-from) take_from="${2:?--take-data-from needs a project name}"; shift ;;
     --keep-new-data) keep_new=1 ;;
@@ -70,6 +74,40 @@ if ((c_major < 2 || (c_major == 2 && ${c_minor%%[!0-9]*} < 24))); then
 fi
 [[ -f .env ]] || die ".env not found. Copy it from your previous install, or: cp .env.example .env (then set POSTGRES_PASSWORD)"
 
+# --- Authentication secrets (Milestone 8) -----------------------------------------------------
+# Generated once and kept in .env, so upgrades reuse them. Letters and digits only, so they need
+# no quoting in .env.
+random_string() { { LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c "$1"; } || true; }
+ensure_env() { # ensure_env NAME LENGTH: append NAME=<random> if NAME is missing or empty
+  if [[ -z "$(env_value "$1")" ]]; then
+    [[ -z "$(tail -c 1 .env)" ]] || echo >>.env
+    if grep -q "^$1=" .env; then
+      sed -i.bak "s/^$1=.*/$1=$(random_string "$2")/" .env && rm -f .env.bak
+    else
+      echo "$1=$(random_string "$2")" >>.env
+    fi
+    info "Generated $1 in .env"
+  fi
+}
+if [[ "$(env_value AUTH_ENABLED | tr '[:upper:]' '[:lower:]')" != "false" ]]; then
+  ensure_env AUTH_SECRET_KEY 48
+  ensure_env ADMIN_INITIAL_PASSWORD 20
+fi
+
+# --- Tool sandbox (Milestone 9) ----------------------------------------------------------------
+tools_enabled="$(env_value TOOL_EXECUTION_ENABLED | tr '[:upper:]' '[:lower:]')"
+if [[ " ${profiles[*]-} " == *" tools "* ]]; then
+  ensure_env TOOL_RUNNER_TOKEN 48
+  if [[ ! -f tools/tools.yaml ]]; then
+    cp tools/tools.example.yaml tools/tools.yaml
+    info "Created tools/tools.yaml from tools/tools.example.yaml (review it: these tools will run)"
+  fi
+  [[ "$tools_enabled" == "true" ]] \
+    || warn "The tool runner starts, but runs cannot use it until TOOL_EXECUTION_ENABLED=true in .env."
+elif [[ "$tools_enabled" == "true" ]]; then
+  warn "TOOL_EXECUTION_ENABLED=true but the tool runner is not started; add --tools."
+fi
+
 # --- Find installs from older releases that used a different project name -------------------
 legacy=()
 while read -r proj image; do
@@ -86,6 +124,11 @@ if ((${#profiles[@]} == 0)) && docker ps -q --filter "label=com.docker.compose.s
   --filter status=running | grep -q .; then
   info "mock-llm is running in the install being replaced; keeping it (profile 'mock')"
   profiles+=(--profile mock)
+fi
+if [[ " ${profiles[*]-} " != *" tools "* ]] && docker ps -q \
+  --filter "label=com.docker.compose.service=tool-runner" --filter status=running | grep -q .; then
+  info "tool-runner is running in the install being replaced; keeping it (profile 'tools')"
+  profiles+=(--profile tools)
 fi
 
 if ((${#legacy[@]})); then
@@ -193,6 +236,21 @@ info "Building and starting '$PROJECT' (migrations run automatically)"
 
 if ((smoke)); then
   COMPOSE="${COMPOSE[*]}" bash scripts/smoke-test.sh
+fi
+
+# --- First sign-in ------------------------------------------------------------------------------
+if [[ "$(env_value AUTH_ENABLED | tr '[:upper:]' '[:lower:]')" == "false" ]]; then
+  warn "AUTH_ENABLED=false: anyone who can reach the UI is an administrator."
+else
+  admin_name="$(env_value ADMIN_USERNAME)"
+  admin_name="${admin_name:-admin}"
+  # The bootstrap administrator still has its initial password until someone signs in and
+  # changes it; only then is the password printed.
+  if "${COMPOSE[@]}" exec -T api python -m app.cli.admin list-users 2>/dev/null \
+    | grep -E "^$admin_name +admin .*must-change-password" >/dev/null; then
+    info "Sign in at http://<this host>:${frontend_port:-3000} as '$admin_name' with password: $(env_value ADMIN_INITIAL_PASSWORD)"
+    info "You must choose a new password at the first sign-in. (The password is ADMIN_INITIAL_PASSWORD in .env.)"
+  fi
 fi
 
 # --- Leftovers -----------------------------------------------------------------------------------

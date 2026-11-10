@@ -13,6 +13,7 @@ import {
   Tabs,
   formatRelative,
 } from "../../components/ui";
+import { useCanEdit } from "../../auth/AuthContext";
 import { useAsync } from "../../hooks/useAsync";
 import { ApiError, api } from "../../services/api";
 import type { Dataset, DatasetCase, DatasetVersion } from "../../types/api";
@@ -328,6 +329,7 @@ function DetailsTab({ dataset, onSaved }: { dataset: Dataset; onSaved: (d: Datas
 }
 
 export function DatasetDetailPage() {
+  const canEdit = useCanEdit();
   const { datasetId = "" } = useParams();
   const navigate = useNavigate();
   const location = useLocation();
@@ -382,14 +384,16 @@ export function DatasetDetailPage() {
                 <Download size={16} /> Export JSONL
               </a>
             )}
-            {v && (
+            {canEdit && v && (
               <button type="button" className="btn" onClick={() => void duplicate()}>
                 <Copy size={16} /> Duplicate
               </button>
             )}
-            <button type="button" className="btn btn-danger-ghost" onClick={() => setConfirmDelete(true)} aria-label={`Delete ${d.name}`}>
-              <Trash2 size={16} /> Delete
-            </button>
+            {canEdit && (
+              <button type="button" className="btn btn-danger-ghost" onClick={() => setConfirmDelete(true)} aria-label={`Delete ${d.name}`}>
+                <Trash2 size={16} /> Delete
+              </button>
+            )}
           </>
         }
       />

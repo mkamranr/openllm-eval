@@ -25,7 +25,9 @@ _SENSITIVE_KEY = re.compile(
 _URL_CREDENTIALS = re.compile(
     r"(?P<scheme>[a-zA-Z][a-zA-Z0-9+.-]*://)(?P<user>[^:/@\s]*):[^@/\s]+@"
 )
-_BEARER = re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]+")
+_BEARER = re.compile(r"(?i)\b(bearer|negotiate)\s+[A-Za-z0-9._~+/=-]+")
+# OpenLLM-Eval API tokens, wherever they appear.
+_API_TOKEN = re.compile(r"\boel_[A-Za-z0-9_-]{16,}")
 
 
 def is_sensitive_key(key: str) -> bool:
@@ -34,7 +36,8 @@ def is_sensitive_key(key: str) -> bool:
 
 def redact_text(text: str) -> str:
     text = _URL_CREDENTIALS.sub(lambda m: f"{m['scheme']}{m['user']}:{REDACTED}@", text)
-    return _BEARER.sub(f"Bearer {REDACTED}", text)
+    text = _BEARER.sub(lambda m: f"{m[1]} {REDACTED}", text)
+    return _API_TOKEN.sub(f"oel_{REDACTED}", text)
 
 
 def redact_value(value: Any) -> Any:

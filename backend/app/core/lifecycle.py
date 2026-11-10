@@ -11,6 +11,7 @@ from redis.asyncio import Redis
 from app import __version__
 from app.adapters import registry as _adapter_registry  # noqa: F401  (registers adapters)
 from app.adapters.base import AdapterContext
+from app.auth.bootstrap import bootstrap_admin
 from app.core.config import Settings
 from app.core.logging import get_logger
 from app.core.network_policy import NetworkPolicy
@@ -56,7 +57,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             "(ENDPOINT_ALLOW_PRIVATE_NETWORKS=true).",
         )
 
-    logger.info("app_startup", version=__version__, environment=settings.environment)
+    await bootstrap_admin(app.state.session_factory, settings)
+
+    logger.info(
+        "app_startup",
+        version=__version__,
+        environment=settings.environment,
+        auth_enabled=settings.auth_enabled,
+    )
     try:
         yield
     finally:

@@ -5,6 +5,10 @@
 - [Getting started](user-guide/getting-started.md): deploy, connect a model, import a dataset,
   run a benchmark, evaluate quality, and read the results.
 - [Dataset format](user-guide/datasets.md): case types, fields, CSV conventions, and examples.
+- [Authentication and roles](user-guide/authentication.md): local accounts, Active Directory,
+  Windows single sign-on, API tokens, and recovery commands.
+- [Tool sandbox](user-guide/tool-sandbox.md): integration-mode tool calls executed by declared
+  tools in an isolated container.
 
 ## Reference
 

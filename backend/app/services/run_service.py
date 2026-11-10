@@ -65,6 +65,7 @@ from app.schemas.run import (
     RunSummary,
     RunTelemetry,
 )
+from app.services import tool_service
 from app.services.project_service import get_project
 
 SNAPSHOT_SCHEMA_VERSION = "1"
@@ -189,6 +190,7 @@ def to_read(run: BenchmarkRun) -> RunRead:
         status=run.status,
         suites=snap.get("suites", []),
         framework_version=run.framework_version,
+        created_by=run.created_by,
         created_at=run.created_at,
         updated_at=run.updated_at,
         started_at=run.started_at,
@@ -298,7 +300,14 @@ async def apply_profile(
         ) from None
 
 
-async def create_run(session: AsyncSession, settings: Settings, data: RunCreate) -> BenchmarkRun:
+async def create_run(
+    session: AsyncSession,
+    settings: Settings,
+    data: RunCreate,
+    *,
+    created_by: str | None = None,
+    created_by_user_id: uuid.UUID | None = None,
+) -> BenchmarkRun:
     data, profile = await apply_profile(session, data)
     if data.project_id is not None:
         await get_project(session, data.project_id)
@@ -392,6 +401,12 @@ async def create_run(session: AsyncSession, settings: Settings, data: RunCreate)
     except PlanError as exc:
         raise _invalid(str(exc), "load") from None
 
+    tool_registry = None
+    if "tool_calling" in quality_suites and data.evaluation.tool_mode == "integration":
+        tool_registry = await tool_service.registry_for_run(
+            session, settings, [v.id for v in versions]
+        )
+
     ep_snaps = [
         endpoint_snapshot(by_id[eid], data.load, data.generation) for eid in data.endpoint_ids
     ]
@@ -407,7 +422,7 @@ async def create_run(session: AsyncSession, settings: Settings, data: RunCreate)
         "datasets": dataset_snaps,
         "endpoints": ep_snaps,
         "evaluation": evaluation_snapshot(
-            quality_suites, data.evaluation, embedding_snapshot, judge_snapshot
+            quality_suites, data.evaluation, embedding_snapshot, judge_snapshot, tool_registry
         ),
         "profile": {"id": str(profile.id), "name": profile.name} if profile else None,
         "created_at": utcnow().isoformat(),
@@ -421,6 +436,8 @@ async def create_run(session: AsyncSession, settings: Settings, data: RunCreate)
         framework_version=__version__,
         progress={},
         profile_id=profile.id if profile else None,
+        created_by=created_by,
+        created_by_user_id=created_by_user_id,
     )
     run.datasets = [
         RunDataset(
@@ -454,6 +471,7 @@ def evaluation_snapshot(
     config: EvaluationConfig,
     embedding_endpoint: dict[str, Any] | None,
     judge_endpoint: dict[str, Any] | None = None,
+    tool_registry: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """What evaluates this run, frozen at creation: evaluator names and versions, settings,
     and the (secret-free) embedding and judge endpoints."""
@@ -469,13 +487,9 @@ def evaluation_snapshot(
             {"name": e.name, "version": e.version, "suite": e.suite, "kind": e.kind}
             for e in evaluators_for(suites, cfg)
         ],
-        "tool_execution": "simulated (fixture results; nothing is executed)"
-        if "tool_calling" in suites and cfg["tool_mode"] == "simulated"
-        else (
-            "generation only (calls are inspected, not answered)"
-            if "tool_calling" in suites
-            else None
-        ),
+        "tool_execution": _tool_execution_label(suites, cfg["tool_mode"]),
+        # Integration mode: the runner's tools.yaml hash and the version of each tool used.
+        "tool_registry": tool_registry,
         "embedding_endpoint": embedding_endpoint,
         "judge_endpoint": judge_endpoint,
         "judge_prompt_version": JUDGE_PROMPT_VERSION if judge_endpoint else None,
@@ -483,6 +497,16 @@ def evaluation_snapshot(
             ("judge" if judge_endpoint else "lexical") if set(suites) & set(JUDGE_SUITES) else None
         ),
     }
+
+
+def _tool_execution_label(suites: list[str], mode: str) -> str | None:
+    if "tool_calling" not in suites:
+        return None
+    if mode == "integration":
+        return "integration (declared tools executed in the sandboxed tool runner)"
+    if mode == "simulated":
+        return "simulated (fixture results; nothing is executed)"
+    return "generation only (calls are inspected, not answered)"
 
 
 # ---------------------------------------------------------------------------------- control

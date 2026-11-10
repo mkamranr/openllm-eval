@@ -91,13 +91,31 @@ async def ready(
         redis, redis_status.status == "ok", settings.redis_connect_timeout_seconds
     )
     healthy = database.status == "ok" and redis_status.status == "ok"
+    tool_runner = await _check_tool_runner(settings) if settings.tool_execution_enabled else None
     body = ReadinessResponse(
         status="ok" if healthy else "degraded",
         database=database,
         redis=redis_status,
         worker=worker,
+        auth_enabled=settings.auth_enabled,
+        tool_runner=tool_runner,
     )
     return JSONResponse(status_code=200 if healthy else 503, content=body.model_dump())
+
+
+async def _check_tool_runner(settings: Settings) -> ComponentStatus:
+    from app.services.tool_service import fetch_registry
+
+    started = time.perf_counter()
+    registry, error = await fetch_registry(settings)
+    latency = round((time.perf_counter() - started) * 1000, 2)
+    if registry is None:
+        return ComponentStatus(status="unavailable", latency_ms=latency, detail=error)
+    if registry.get("error"):
+        return ComponentStatus(status="error", latency_ms=latency, detail=registry["error"][:300])
+    return ComponentStatus(
+        status="ok", latency_ms=latency, detail=f"{len(registry.get('tools') or [])} tool(s)"
+    )
 
 
 @router.get("/version", response_model=VersionResponse, summary="Framework version")

@@ -2,6 +2,7 @@ import { AlertTriangle, Copy, Pencil, Plus, Search, Server, Trash2, Zap } from "
 import { useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 
+import { useCanEdit } from "../../auth/AuthContext";
 import { EndpointStatusBadge } from "../../components/status/StatusBadge";
 import {
   Callout,
@@ -22,6 +23,7 @@ import { TestResultPanel } from "./TestResultPanel";
 type Filter = "all" | "enabled" | "disabled";
 
 export function EndpointsPage() {
+  const canEdit = useCanEdit();
   const endpoints = useAsync(() => api.endpoints.list(), []);
   const projects = useAsync(() => api.projects.list(), []);
   const adapters = useAsync(() => api.adapters(), []);
@@ -88,9 +90,11 @@ export function EndpointsPage() {
         title="Models / Endpoints"
         description="Register OpenAI-compatible model servers (vLLM, llama.cpp, Ollama, hosted APIs) and verify connectivity."
         actions={
-          <button type="button" className="btn btn-primary" onClick={() => setEditing("new")}>
-            <Plus size={16} /> Add endpoint
-          </button>
+          canEdit && (
+            <button type="button" className="btn btn-primary" onClick={() => setEditing("new")}>
+              <Plus size={16} /> Add endpoint
+            </button>
+          )
         }
       />
 

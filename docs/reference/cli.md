@@ -6,12 +6,42 @@ The `openllm-eval` command talks to a running API. Inside the containers, run
 Every command that talks to the API accepts `--api-url`, which defaults to `$OPENLLM_API_URL`
 or `http://localhost:8000`. Most commands also accept `--json` for machine-readable output.
 
+Sign-in: every command sends the API token from `$OPENLLM_API_TOKEN`, or from the token file
+(`$OPENLLM_TOKEN_FILE`, default `~/.config/openllm-eval/token`). `openllm-eval auth login`
+creates one.
+
 ## General
 
 | Command | Description |
 |---|---|
 | `openllm-eval version` | Framework version |
 | `openllm-eval health [--timeout 5]` | API, database, Redis, and worker readiness. Exits non-zero when not ready |
+
+## Sign-in
+
+| Command | Description |
+|---|---|
+| `openllm-eval auth login [-u NAME] [--days 90]` | Prompts for the password, creates an API token (0 days = never expires), and stores it in the token file (mode 0600). The temporary session is ended |
+| `openllm-eval auth whoami [--json]` | The user the stored token belongs to |
+| `openllm-eval auth logout` | Revoke the stored token and delete the file |
+
+## Server administration
+
+`python -m app.cli.admin` works directly on the database, inside the API container
+(`docker compose exec api python -m app.cli.admin …`). It needs no sign-in, so use it for
+recovery.
+
+| Command | Description |
+|---|---|
+| `list-users` | Users with source, role, and flags (`disabled`, `must-change-password`) |
+| `create-user NAME [--role viewer\|editor\|admin] [--password-stdin] [--no-must-change]` | Create a local user; prints a generated password unless `--password-stdin` |
+| `reset-password NAME [--password-stdin]` | New temporary password; must be changed at the next sign-in |
+| `set-role NAME ROLE` | Change a role (pins it for directory users) |
+| `enable-user NAME` | Re-enable a disabled account |
+| `delete-user NAME` | Delete a user |
+| `create-token (--user NAME \| --service-user NAME [--role R]) [--ttl 1h\|30m\|90d\|never] [--name N]` | Print a new API token, and nothing else. `--service-user` creates a password-less service account if needed |
+| `unlock NAME` | Clear a sign-in lockout |
+| `disable-ldap` | Turn off directory sign-in, for example after a misconfiguration |
 
 ## Endpoints
 

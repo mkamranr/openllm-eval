@@ -188,6 +188,25 @@ version, framework version, run status, results included / total / truncated, wa
 `baseline_run_id` (a run id or run-model id; null = first run), timestamps. The comparison
 itself is computed when read, so nothing derived is stored.
 
+### Authentication (migration `0008`)
+
+- `users`: `username` (unique, lower case), `display_name`, `email`, `source` (`local`, `ldap`,
+  `kerberos`, `service`), `password_hash` (argon2id; `NULL` for directory and service accounts),
+  `role` (`viewer`, `editor`, `admin`), `role_pinned` (directory users: keep the role instead of
+  re-mapping groups at sign-in), `must_change_password`, `disabled`, `directory_dn`, `groups`
+  (snapshot from the last sign-in), `last_login_at`, `password_changed_at`, timestamps.
+- `user_sessions`: `user_id` (cascade), `token_hash` (SHA-256; the token itself is only in the
+  cookie), `auth_method`, `created_at`, `last_seen_at`, `expires_at`, `ip`, `user_agent`.
+- `api_tokens`: `user_id` (cascade), `name`, `prefix` (for display), `token_hash`, `created_at`,
+  `expires_at`, `last_used_at`, `revoked_at`.
+- `auth_settings`: a single row (`id = 1`). `ldap` and `kerberos` hold the non-secret settings
+  as JSON. `ldap_bind_password_enc` and `kerberos_keytab_enc` hold AES-GCM ciphertext. Also
+  `updated_by` and `updated_at`.
+- `audit_events`: `at`, `actor_user_id` (SET NULL), `actor_name` (kept after the user is
+  deleted), `action`, `target`, `ip`, `details` (JSON, redacted).
+- `benchmark_runs.created_by_user_id` (SET NULL) records who started a run, next to the
+  existing `created_by` name.
+
 Design notes:
 
 - `is_warmup` and `phase` are added to `run_case_results` so that warm-up

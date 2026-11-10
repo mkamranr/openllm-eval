@@ -1,5 +1,6 @@
 """ORM models. Import every model here so Alembic autogenerate sees the full metadata."""
 
+from app.db.models.auth import ApiToken, AuditEvent, AuthSettings, User, UserSession
 from app.db.models.dataset import Dataset, DatasetCase, DatasetVersion
 from app.db.models.endpoint import ModelEndpoint
 from app.db.models.evaluation import EvaluationProfile, EvaluationResult
@@ -15,6 +16,9 @@ from app.db.models.run import (
 )
 
 __all__ = [
+    "ApiToken",
+    "AuditEvent",
+    "AuthSettings",
     "BenchmarkRun",
     "Comparison",
     "Dataset",
@@ -30,4 +34,6 @@ __all__ = [
     "RunCaseResult",
     "RunDataset",
     "RunModel",
+    "User",
+    "UserSession",
 ]

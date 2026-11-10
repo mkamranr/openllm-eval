@@ -17,6 +17,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_app_settings, get_redis, get_session
+from app.auth.dependencies import Principal, get_principal
 from app.core.config import Settings
 from app.db.models.run import (
     CANCEL_REQUESTED,
@@ -82,8 +83,15 @@ async def create_run(
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_app_settings),
     redis: Redis = Depends(get_redis),
+    principal: Principal = Depends(get_principal),
 ) -> RunDetail:
-    run = await run_service.create_run(session, settings, data)
+    run = await run_service.create_run(
+        session,
+        settings,
+        data,
+        created_by=principal.username,
+        created_by_user_id=principal.user_id,
+    )
     await notify_run_queued(redis, run.id)
     return run_service.to_detail(run)
 

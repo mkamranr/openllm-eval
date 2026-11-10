@@ -1,4 +1,6 @@
 import { Callout, Switch } from "../../components/ui";
+import { useAsync } from "../../hooks/useAsync";
+import { api } from "../../services/api";
 import type { Endpoint } from "../../types/api";
 import type { EvaluationConfig, ToolMode } from "../../types/runs";
 
@@ -83,7 +85,32 @@ export function fromEvaluationConfig(c: Partial<EvaluationConfig>): QualitySetti
 const TOOL_MODES: [ToolMode, string][] = [
   ["simulated", "Simulated results"],
   ["generation_only", "Inspect calls only"],
+  ["integration", "Execute in sandbox"],
 ];
+
+export const TOOL_MODE_LABELS: Record<ToolMode, string> = {
+  simulated: "simulated (fixtures)",
+  generation_only: "inspected only",
+  integration: "executed in the tool sandbox",
+};
+
+const TOOL_MODE_HINTS: Record<ToolMode, string> = {
+  simulated:
+    "Valid calls get the dataset's fixture results and the model continues, so the final answer can be checked. Nothing is ever executed.",
+  generation_only: "Calls are checked as returned; no follow-up request is sent, so final answers are not evaluated.",
+  integration:
+    "Valid calls are executed by the administrator-declared tools in the isolated tool runner, and the model continues with the real results. Every tool the dataset offers must be declared.",
+};
+
+/** Why integration mode cannot be chosen, or null when it can. */
+function integrationBlocked(status: { enabled: boolean; reachable: boolean; registry_error: string | null } | undefined, failed: boolean) {
+  if (failed) return "Tool runner status is unavailable.";
+  if (!status) return "Checking the tool runner…";
+  if (!status.enabled) return "Tool execution is off on this server (TOOL_EXECUTION_ENABLED).";
+  if (!status.reachable) return "The tool runner is not reachable.";
+  if (status.registry_error) return "The tool runner's tools.yaml is invalid.";
+  return null;
+}
 
 export function QualitySettingsForm({
   value: q,
@@ -97,6 +124,9 @@ export function QualitySettingsForm({
   endpoints: Endpoint[];
 }) {
   const errors = validateQuality(q);
+  const wantsTools = types.includes("tool_calling");
+  const tools = useAsync(() => (wantsTools ? api.tools.status() : Promise.resolve(undefined)), [wantsTools]);
+  const blocked = integrationBlocked(tools.data, Boolean(tools.error));
   return (
     <section className="card" aria-label="Quality settings" style={{ boxShadow: "none" }}>
       <h3 style={{ marginTop: 0 }}>Quality settings</h3>
@@ -105,18 +135,24 @@ export function QualitySettingsForm({
           <div className="field">
             <span className="label" id="tool-mode-label">Tool calls</span>
             <div className="segmented" role="radiogroup" aria-labelledby="tool-mode-label">
-              {TOOL_MODES.map(([k, label]) => (
-                <button key={k} type="button" role="radio" aria-checked={q.toolMode === k} aria-pressed={q.toolMode === k}
-                  onClick={() => onChange({ toolMode: k })}>
-                  {label}
-                </button>
-              ))}
+              {TOOL_MODES.map(([k, label]) => {
+                const disabled = k === "integration" && blocked !== null && q.toolMode !== "integration";
+                return (
+                  <button key={k} type="button" role="radio" aria-checked={q.toolMode === k} aria-pressed={q.toolMode === k}
+                    disabled={disabled} title={disabled ? blocked ?? undefined : undefined}
+                    onClick={() => onChange({ toolMode: k })}>
+                    {label}
+                  </button>
+                );
+              })}
             </div>
-            <span className="hint">
-              {q.toolMode === "simulated"
-                ? "Valid calls get the dataset's fixture results and the model continues, so the final answer can be checked. Nothing is ever executed."
-                : "Calls are checked as returned; no follow-up request is sent, so final answers are not evaluated."}
-            </span>
+            <span className="hint">{TOOL_MODE_HINTS[q.toolMode]}</span>
+            {q.toolMode === "integration" && blocked && (
+              <span className="field-error" role="alert">{blocked} Runs in this mode will be rejected.</span>
+            )}
+            {q.toolMode !== "integration" && blocked && tools.data && (
+              <span className="hint">Execute in sandbox: {blocked}</span>
+            )}
           </div>
         )}
         {types.includes("answer_quality") && (

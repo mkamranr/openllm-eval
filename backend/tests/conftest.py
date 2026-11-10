@@ -13,6 +13,7 @@ import logging
 import os
 import threading
 import time
+import uuid
 from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 
@@ -22,6 +23,7 @@ import pytest
 import uvicorn
 from fastapi import FastAPI
 from redis.asyncio import Redis
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.adapters.base import AdapterContext
 from app.core.config import Settings
@@ -36,6 +38,7 @@ BACKEND_ROOT = Path(__file__).resolve().parents[1]
 MOCK_API_KEY = "sk-mock-test-key-7f3a9c0d1e2b"
 MOCK_SECRET_REF = "env:OPENLLM_SECRET_MOCK_KEY"
 TEST_ENVIRON = {"OPENLLM_SECRET_MOCK_KEY": MOCK_API_KEY}
+TEST_AUTH_SECRET_KEY = "test-auth-secret-key-0123456789"
 
 
 @pytest.fixture
@@ -56,6 +59,8 @@ def settings(database_url: str) -> Settings:
         redis_connect_timeout_seconds=1,
         # Tests talk to a mock model server on 127.0.0.1.
         endpoint_allow_private_networks=True,
+        auth_enabled=True,
+        auth_secret_key=TEST_AUTH_SECRET_KEY,
     )
 
 
@@ -147,10 +152,54 @@ def build_app(
     return app
 
 
-async def _client_for(app: FastAPI) -> AsyncIterator[httpx.AsyncClient]:
+async def create_test_user(
+    app: FastAPI,
+    username: str,
+    role: str = "admin",
+    *,
+    password: str | None = None,
+    must_change_password: bool = False,
+    source: str = "local",
+) -> tuple[str, str]:
+    """Create a user directly in the database and return (user id, API token)."""
+    from app.auth.passwords import hash_password
+    from app.db.models.auth import User
+    from app.services.auth_service import issue_token
+
+    async with app.state.session_factory() as session:
+        user = User(
+            username=username,
+            source=source,
+            password_hash=hash_password(password) if password else None,
+            role=role,
+            role_pinned=False,
+            must_change_password=must_change_password,
+            disabled=False,
+            groups=[],
+        )
+        session.add(user)
+        await session.flush()
+        created = await issue_token(session, user, "tests", None)
+        await session.commit()
+        return str(user.id), created.token
+
+
+async def _client_for(app: FastAPI, auth: bool = True) -> AsyncIterator[httpx.AsyncClient]:
+    """Client around ``app``. With ``auth`` (default), requests carry an administrator's API
+    token whenever the database has been migrated, so tests written before sign-in existed
+    keep working."""
     async with app.router.lifespan_context(app):
         transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        headers = {}
+        if auth and app.state.settings.auth_enabled:
+            try:
+                _, token = await create_test_user(app, f"test-admin-{uuid.uuid4().hex[:8]}")
+                headers["Authorization"] = f"Bearer {token}"
+            except SQLAlchemyError:
+                pass  # schema not migrated: only public routes are used
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test", headers=headers
+        ) as client:
             yield client
 
 
@@ -175,6 +224,13 @@ async def migrated_app(app: FastAPI, database_url: str) -> FastAPI:
 async def api(migrated_app: FastAPI) -> AsyncIterator[httpx.AsyncClient]:
     """API client backed by a fully migrated database."""
     async for c in _client_for(migrated_app):
+        yield c
+
+
+@pytest.fixture
+async def anon(migrated_app: FastAPI) -> AsyncIterator[httpx.AsyncClient]:
+    """Unauthenticated client backed by a fully migrated database."""
+    async for c in _client_for(migrated_app, auth=False):
         yield c
 
 
