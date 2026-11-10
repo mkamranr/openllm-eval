@@ -64,13 +64,19 @@ def test_load_validation(load, message):
 
 
 def test_only_implemented_suites_are_accepted():
+    assert RunCreate(
+        name="x",
+        endpoint_ids=["00000000-0000-0000-0000-000000000001"],
+        datasets=[{"dataset_id": "00000000-0000-0000-0000-000000000002"}],
+        suites=["context_window"],
+    ).suites == ["context_window"]
     base = {
         "name": "x",
         "endpoint_ids": ["00000000-0000-0000-0000-000000000001"],
         "datasets": [{"dataset_id": "00000000-0000-0000-0000-000000000002"}],
     }
     assert RunCreate(**base).suites == ["performance"]
-    with pytest.raises(ValidationError, match="Milestone 7"):
+    with pytest.raises(ValidationError, match="compared across runs"):
         RunCreate(**base, suites=["quantization"])
     with pytest.raises(ValidationError, match="Unknown suite"):
         RunCreate(**base, suites=["vibes"])

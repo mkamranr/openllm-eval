@@ -288,8 +288,21 @@ class AnswerLocation(BaseModel):
 class LongContextCase(CaseBase):
     type: Literal["long_context"]
     context: NonEmpty
-    expected_answer: NonEmpty
+    expected_answer: NonEmpty | None = None
+    # Multi-fact retrieval: every value must appear in the answer.
+    expected_answers: list[NonEmpty] | None = Field(default=None, min_length=1, max_length=50)
     answer_location: AnswerLocation | None = None
+    # Requested context size in tokens (context-window experiments group results by it). The
+    # actual input tokens are whatever the server reports at run time.
+    context_length: int | None = Field(default=None, ge=1, le=100_000_000)
+    # How the case's size was estimated: {"tokens", "method", "chars_per_token", "version"}.
+    context_estimate: dict[str, Any] | None = None
+
+    @model_validator(mode="after")
+    def _expected(self) -> LongContextCase:
+        if self.expected_answer is None and not self.expected_answers:
+            raise ValueError("provide 'expected_answer' or 'expected_answers'")
+        return self
 
 
 class SafetyCase(CaseBase):

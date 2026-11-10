@@ -166,7 +166,7 @@ def test_errors_report_line_numbers_case_ids_and_fields():
         ({"id": " a", "type": "chat", "input": "x"}, "whitespace"),
         ({"id": "a", "type": "chat", "input": "x", "tags": ["ok", ""]}, "1-64 characters"),
         ({"id": "a", "type": "chat", "input": "x", "split": "holdout"}, "Input should be"),
-        ({"id": "a", "type": "long_context", "input": "q", "context": "c"}, "Field required"),
+        ({"id": "a", "type": "long_context", "input": "q", "context": "c"}, "expected_answer"),
         ({"id": "a", "type": "safety", "input": "q"}, "Field required"),
         (
             {

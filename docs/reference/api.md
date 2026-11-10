@@ -47,6 +47,22 @@ and port 8000.
 | POST | `/endpoints/{id}/test` | Send one test request; returns latency, TTFT, tokens, and a response preview |
 | GET | `/endpoints/{id}/metadata` | Models listed by the server (`/models`) |
 
+`model_metadata` and `deployment_metadata` are free-form objects, but the well-known keys below
+are type-checked and blank values are dropped. Unknown stays unknown, and nothing is inferred:
+
+- model: `family`, `revision`, `parameter_count`, `quantization_method`, `weight_precision`,
+  `weight_bits`, `activation_precision`, `kv_cache_dtype`;
+- deployment: `serving_backend`, `backend_version`, `gpu_type`, `gpu_count`, `gpu_memory_gb`,
+  `tensor_parallel_size`, `pipeline_parallel_size`, `max_model_len`, `gpu_memory_utilization`,
+  `max_num_seqs`, `max_num_batched_tokens`, `server_args`, `driver_version`, `cuda_version`,
+  `cpu`, `ram_gb`.
+
+`telemetry` is optional; set it to `null` to remove it. Example: `{"url":
+"http://gpu-host:9400/metrics", "interval_seconds": 2, "gpu_indices": [0, 1],
+"timeout_seconds": 2}`. It names a Prometheus text page (NVIDIA DCGM exporter,
+nvidia_gpu_exporter, or vLLM `/metrics`) that is scraped while the model is measured. The URL
+must pass the network policy.
+
 ## Datasets
 
 | Method | Path | Description |
@@ -55,6 +71,7 @@ and port 8000.
 | POST | `/datasets/validate` | Validate a file without saving it |
 | GET | `/datasets/samples` | Bundled sample datasets |
 | POST | `/datasets/samples/{sample_id}/install` | Install a sample |
+| POST | `/datasets/generate` | Generate a context-window dataset (below) |
 | GET / POST | `/datasets` | List or import (file + `name`, `dataset_type`) |
 | GET / PATCH / DELETE | `/datasets/{id}` | |
 | POST | `/datasets/{id}/duplicate` | Copy the current version into a new dataset |
@@ -63,6 +80,14 @@ and port 8000.
 | GET | `/datasets/{id}/preview` | Paged cases (`version_id`, `q`, `case_type`, `tag`) |
 | GET | `/datasets/{id}/cases/{case_id}` | One case |
 | GET | `/datasets/{id}/export` | Normalized JSONL; its SHA-256 equals the version's `content_hash` |
+
+Generate body: `{"name": "needles", "params": {"context_lengths": [1024, 4096], "depths":
+[0.1, 0.5, 0.9], "needles_per_case": 1, "repeats": 1, "seed": 0}}`.
+
+- Lengths are requested sizes in tokens (128 to 524,288), estimated at 4 characters per token.
+- `needles_per_case` above 1 makes multi-fact cases; the depths are then spread evenly.
+- A dataset holds at most 1000 cases and 6,000,000 estimated tokens.
+- Generation is deterministic: the same body gives the same content hash.
 
 ## Evaluation
 
@@ -83,6 +108,7 @@ and port 8000.
 | POST | `/runs/{id}/cancel` | Request cancellation |
 | POST | `/runs/{id}/retry-failed` | Re-run failed or unfinished requests |
 | GET | `/runs/{id}/metrics` | Aggregate metrics (`live` is true while the run is still running) |
+| GET | `/runs/{id}/telemetry` | Resource samples (`run_model_id` filter) and per-model scrape status |
 | GET | `/runs/{id}/results` | Attempts. Filters: `run_model_id`, `status`, `phase`, `final_only`, `q`, `evaluator`, `evaluation` (`passed`, `failed`, `not_applicable`, `skipped`, `requires_review`) |
 | GET | `/runs/{id}/results/{result_id}` | One attempt with the full response and all evaluations |
 | GET | `/runs/{id}/events` | Server-Sent Events (below) |
@@ -100,8 +126,9 @@ and port 8000.
 
 A report is generated once and stored; it doesn't change if the run is later retried. The JSON
 export holds everything the other formats are rendered from: run, configuration snapshot,
-models, datasets, metrics, results (with evaluations), chart series, failures, warnings, and
-reproduction instructions.
+models, datasets, metrics, results (with evaluations), chart series, failures, warnings,
+telemetry samples (thinned to 2000 per model, without per-GPU detail), and reproduction
+instructions.
 
 ## Comparison
 
@@ -118,7 +145,10 @@ The result lists `subjects` (one per model of each run), `comparability` (`overa
 `performance`, `quality`, and `differences` with `severity` critical / major / minor / info),
 `metrics` (per subject: `value`, `delta`, `relative_change` (null when the baseline is 0 or
 missing), `improved`, `unavailable_reason`), `transitions` (per evaluator: pass→fail and
-fail→pass cases; new and fixed errors; lists capped at 200, totals exact), and `notes`.
+fail→pass cases; new and fixed errors; lists capped at 200, totals exact), `variants`
+(declared model and deployment fields per subject, with `null` meaning unknown; `warnings`;
+`key_metrics`; and `context` metrics per requested length), and `notes`. Context-window rows
+are left out of `metrics` because their names repeat per length.
 
 ### Create a run
 
@@ -135,9 +165,10 @@ fail→pass cases; new and fixed errors; lists capped at 200, totals exact), and
 }
 ```
 
-Suites: `performance`, `answer_quality`, `structured_output`, `tool_calling`, `rag`, and
-`hallucination`. With `profile_id`, any field you leave out is taken from the profile. Suites
-from later milestones, `tool_mode: "integration"`, datasets without case types for a selected
+Suites: `performance`, `answer_quality`, `structured_output`, `tool_calling`, `rag`,
+`hallucination`, and `context_window`. `quantization` is rejected with an explanation: compare
+runs of the same datasets on each variant instead. With `profile_id`, any field you leave out
+is taken from the profile. Unknown suites, `tool_mode: "integration"`, datasets without case types for a selected
 quality suite, and a `judge` without the `rag` or `hallucination` suite are rejected with a 422.
 `judge` is optional (`null` by default); the snapshot's `evaluation.judge_endpoint` and
 `evidence_method` record what was used.
@@ -150,9 +181,12 @@ quality suite, and a `judge` without the `rag` or `hallucination` suite are reje
 | `quality.` | `quality.<evaluator>` (`pass_rate`, `mean_score`), `quality.evaluated_requests` (`count`), `quality.output_consistency` |
 | `tool.` | `tool.selection_accuracy`, `tool.argument_exact_match_accuracy`, `tool.call_precision`, `tool.call_recall`, `tool.hallucinated_tool_rate`, … |
 | `rag.` | `rag.claim_faithfulness`, `rag.contradicted_claim_rate` (claims pooled over answers) |
+| `context.` | One row per requested length (`context_length` set): `context.requests`, `success_rate`, `overflow_rate`, `oom_rate`, `latency_ms` / `ttft_ms` (`p50`, `p95`), `estimated_input_tokens`, `input_tokens` (server-reported; `token_count_source` in metadata), `actual_to_estimated`, `truncation_suspected`, `retrieval_accuracy` (`pass_rate`, `early`, `middle`, `late`), `fact_recall` |
+| `gpu.` / `telemetry.` | Only when telemetry is configured: `gpu.memory_used_mb` (`max`, `mean`), `gpu.memory_total_mb`, `gpu.utilization_pct`, `gpu.power_w`, `gpu.temperature_c`, `gpu.kv_cache_usage_pct`, `telemetry.samples` (`failures`, `last_error` in metadata) |
 | `hallucination.` | `hallucination.unsupported_claim_rate`, `contradiction_rate`, `unverifiable_claim_rate`, `claim_support_precision`, `evidence_coverage`, `answers_with_contradictions`, `answer_despite_insufficient_evidence`, `abstention_precision`, `abstention_recall` |
 
-Each metric row has `run_model_id`, `load_step` (null means the whole run), `metric_name`,
+Each metric row has `run_model_id`, `load_step` (null means the whole run), `context_length`
+(the requested length for `context.*` rows, otherwise null), `metric_name`,
 `aggregation`, `metric_value`, `metric_unit`, `sample_count`, and `metadata` (the definition,
 plus the reason when the value is null).
 

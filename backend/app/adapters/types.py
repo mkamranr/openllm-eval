@@ -23,6 +23,10 @@ ErrorType = Literal[
     "timeout",
     "connection_error",
     "http_status",
+    # Server errors recognized from their message (Milestone 7): the request did not fit the
+    # model's context window, or the server ran out of (GPU) memory.
+    "context_overflow",
+    "out_of_memory",
     "malformed_response",
     "stream_error",
     "response_too_large",

@@ -104,7 +104,8 @@ describe("NewEvaluationWizard", () => {
     expect(screen.getByLabelText("Selected models")).toHaveTextContent("local-vllm");
     expect(summary).toHaveTextContent("Fixed concurrency: 20 requests at concurrency 8");
     expect(summary).toHaveTextContent("1 per model (excluded from metrics)");
-    expect(screen.getByText(/arrives in a later milestone/)).toHaveTextContent("Quantization");
+    expect(screen.getByText(/Quantization is not a separate suite/)).toBeInTheDocument();
+    expect(screen.queryByText(/arrives in a later milestone/)).not.toBeInTheDocument();
 
     // Stepper lets you jump back to a completed step.
     await user.click(screen.getByRole("button", { name: /Basic Setup/ }));
@@ -221,7 +222,7 @@ describe("NewEvaluationWizard", () => {
     expect(within(quality).getAllByText("Use a value between 0 and 1.").length).toBe(1);
   });
 
-  it("cannot start with only types from later milestones", async () => {
+  it("cannot start with only quantization (compared across runs)", async () => {
     window.localStorage.setItem(
       DRAFT_KEY,
       JSON.stringify({ step: 3, name: "Later only", endpointIds: ["e1"], evaluationTypes: ["quantization"], datasetIds: ["d1"] }),
@@ -229,6 +230,7 @@ describe("NewEvaluationWizard", () => {
     stub();
     renderWizard();
     expect(await screen.findByText(/None of the selected evaluation types can run/)).toBeInTheDocument();
+    expect(screen.getByText(/Quantization is not a separate suite/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Start Evaluation/ })).toBeDisabled();
   });
 

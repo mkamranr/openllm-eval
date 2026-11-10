@@ -11,6 +11,12 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.adapters.types import ConnectionCheck, ModelResponse
+from app.schemas.model_metadata import (
+    DEPLOYMENT_FIELDS,
+    MODEL_FIELDS,
+    TelemetryConfiguration,
+    normalize_metadata,
+)
 
 _HEADER_NAME = re.compile(r"^[A-Za-z0-9!#$%&'*+.^_`|~-]{1,128}$")
 # Plain (non-secret) headers that look like credentials are rejected: their values belong in
@@ -64,6 +70,14 @@ def _check_metadata(value: dict[str, Any]) -> dict[str, Any]:
     if len(json.dumps(value, default=str)) > MAX_METADATA_BYTES:
         raise ValueError(f"Metadata must be at most {MAX_METADATA_BYTES} bytes as JSON.")
     return value
+
+
+def _model_meta(value: dict[str, Any]) -> dict[str, Any]:
+    return _check_metadata(normalize_metadata(value, MODEL_FIELDS))
+
+
+def _deployment_meta(value: dict[str, Any]) -> dict[str, Any]:
+    return _check_metadata(normalize_metadata(value, DEPLOYMENT_FIELDS))
 
 
 def _clean_tags(tags: list[str]) -> list[str]:
@@ -143,12 +157,14 @@ class EndpointCreate(EndpointBase):
     request_configuration: RequestConfiguration = Field(default_factory=RequestConfiguration)
     model_metadata: dict[str, Any] = Field(default_factory=dict)
     deployment_metadata: dict[str, Any] = Field(default_factory=dict)
+    telemetry: TelemetryConfiguration | None = None
     tags: list[str] = Field(default_factory=list)
     enabled: bool = True
 
     _tags = field_validator("tags")(classmethod(lambda cls, v: _clean_tags(v)))
-    _meta = field_validator("model_metadata", "deployment_metadata")(
-        classmethod(lambda cls, v: _check_metadata(v))
+    _model = field_validator("model_metadata")(classmethod(lambda cls, v: _model_meta(v)))
+    _deploy = field_validator("deployment_metadata")(
+        classmethod(lambda cls, v: _deployment_meta(v))
     )
 
 
@@ -164,6 +180,8 @@ class EndpointUpdate(EndpointBase):
     request_configuration: RequestConfiguration | None = None
     model_metadata: dict[str, Any] | None = None
     deployment_metadata: dict[str, Any] | None = None
+    # Explicit null removes the telemetry source.
+    telemetry: TelemetryConfiguration | None = None
     tags: list[str] | None = None
     enabled: bool | None = None
 
@@ -172,10 +190,15 @@ class EndpointUpdate(EndpointBase):
     def _tags(cls, v: list[str] | None) -> list[str] | None:
         return None if v is None else _clean_tags(v)
 
-    @field_validator("model_metadata", "deployment_metadata")
+    @field_validator("model_metadata")
     @classmethod
-    def _meta(cls, v: dict[str, Any] | None) -> dict[str, Any] | None:
-        return None if v is None else _check_metadata(v)
+    def _model(cls, v: dict[str, Any] | None) -> dict[str, Any] | None:
+        return None if v is None else _model_meta(v)
+
+    @field_validator("deployment_metadata")
+    @classmethod
+    def _deploy(cls, v: dict[str, Any] | None) -> dict[str, Any] | None:
+        return None if v is None else _deployment_meta(v)
 
 
 class EndpointClone(EndpointBase):
@@ -198,6 +221,7 @@ class EndpointRead(BaseModel):
     request_configuration: RequestConfiguration
     model_metadata: dict[str, Any]
     deployment_metadata: dict[str, Any]
+    telemetry: TelemetryConfiguration | None = None
     tags: list[str]
     enabled: bool
     last_test_status: str | None

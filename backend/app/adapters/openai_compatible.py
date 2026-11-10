@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+import re
 import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -163,10 +164,38 @@ def _error_message_from_body(body: bytes) -> str:
     return body.decode("utf-8", errors="replace")
 
 
+# Error messages that identify the cause of a failure (vLLM, llama.cpp, TGI, Ollama, OpenAI).
+_CONTEXT_OVERFLOW = re.compile(
+    r"maximum context length|context length|context window|context_length_exceeded|"
+    r"exceeds? the (?:model'?s? )?(?:maximum|max)|too many tokens|prompt is too long|"
+    r"input (?:is )?too long|max_model_len|n_ctx|longer than the maximum|"
+    r"requested \d+ tokens",
+    re.IGNORECASE,
+)
+_OUT_OF_MEMORY = re.compile(
+    r"out of memory|\boom\b|cuda error: out|cudaErrorMemoryAllocation|"
+    r"failed to allocate|insufficient memory|not enough memory",
+    re.IGNORECASE,
+)
+
+
+def classify_error_message(message: str, status: int | None) -> str | None:
+    """``context_overflow`` or ``out_of_memory`` when the message says so, else None.
+    Classification uses the server's message only; it is recorded, never guessed from timing."""
+    if _OUT_OF_MEMORY.search(message):
+        return "out_of_memory"
+    if (status is None or 400 <= status < 500 or status == 500) and _CONTEXT_OVERFLOW.search(
+        message
+    ):
+        return "context_overflow"
+    return None
+
+
 class OpenAICompatibleAdapter(ModelAdapter):
     adapter_type = "openai_compatible"
     display_name = "OpenAI-compatible (vLLM, llama.cpp, Ollama /v1, hosted APIs)"
-    version = "1.0.0"
+    # 1.1.0: context_overflow / out_of_memory error types (Milestone 7).
+    version = "1.1.0"
 
     def __init__(self, config: EndpointRuntimeConfig, context: AdapterContext) -> None:
         super().__init__(config, context)
@@ -309,8 +338,14 @@ class OpenAICompatibleAdapter(ModelAdapter):
             message = f"Redirects are not followed (HTTP {status}). Use the final URL."
         else:
             message = self._scrub(_error_message_from_body(body), secrets) or f"HTTP {status}"
+        kind = classify_error_message(message, status)
+        if kind == "context_overflow":
+            # The same request will not fit next time either.
+            return AdapterError(
+                type="context_overflow", message=message, status_code=status, retryable=False
+            )
         return AdapterError(
-            type="http_status",
+            type=kind or "http_status",
             message=message,
             status_code=status,
             retryable=status in RETRYABLE_STATUS or status >= 500,
@@ -609,7 +644,8 @@ class OpenAICompatibleAdapter(ModelAdapter):
                                 err = chunk["error"]
                                 msg = err.get("message") if isinstance(err, dict) else str(err)
                                 result.error = AdapterError(
-                                    type="stream_error", message=self._scrub(str(msg), secrets)
+                                    type=classify_error_message(str(msg), None) or "stream_error",
+                                    message=self._scrub(str(msg), secrets),
                                 )
                                 break
                             result.response_id = result.response_id or chunk.get("id")

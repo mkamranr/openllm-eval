@@ -185,6 +185,28 @@ class RunCaseResult(UUIDPrimaryKeyMixin, Base):
     created_at: Mapped[datetime] = mapped_column(default=utcnow, nullable=False)
 
 
+class ResourceSample(UUIDPrimaryKeyMixin, Base):
+    """One telemetry scrape while a model was measured (GPU memory, utilization, power, ...).
+
+    ``values`` holds canonical keys (``gpu_memory_used_mb``, ``gpu_utilization_pct``, ...) summed
+    or averaged over the selected GPUs, plus a ``gpus`` list with per-device values.
+    """
+
+    __tablename__ = "resource_samples"
+
+    run_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("benchmark_runs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    run_model_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("run_models.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    captured_at: Mapped[datetime] = mapped_column(nullable=False)
+    # Seconds since the model's measured phase started.
+    offset_seconds: Mapped[float] = mapped_column(Float, nullable=False)
+    source: Mapped[str] = mapped_column(String(32), nullable=False)
+    values: Mapped[dict[str, Any]] = mapped_column(JSONType, nullable=False, default=dict)
+
+
 class RunAggregateMetric(UUIDPrimaryKeyMixin, Base):
     __tablename__ = "run_aggregate_metrics"
 
@@ -196,6 +218,9 @@ class RunAggregateMetric(UUIDPrimaryKeyMixin, Base):
     )
     # NULL = all measured requests; otherwise the ramp step this row describes.
     load_step: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # NULL = all context lengths; otherwise the requested context length (tokens) of the
+    # context-window group this row describes (``context.*`` metrics only).
+    context_length: Mapped[int | None] = mapped_column(Integer, nullable=True)
     metric_name: Mapped[str] = mapped_column(String(64), nullable=False)
     aggregation: Mapped[str] = mapped_column(String(32), nullable=False)
     # NULL = not measurable (the reason is in metadata), never 0 (spec §2.3).

@@ -23,11 +23,16 @@ IMPLEMENTED_SUITES = (
     "tool_calling",
     "rag",
     "hallucination",
+    "context_window",
 )
-PLANNED_SUITES = {
-    "quantization": 7,
-    "context_window": 7,
+# Names that are not suites, with the reason shown to the user.
+NOT_SUITES = {
+    "quantization": (
+        "Quantization is compared across runs, not measured as a suite: declare the quantization "
+        "metadata on each endpoint, run the same datasets on every variant, then compare the runs."
+    ),
 }
+PLANNED_SUITES: dict[str, int] = {}
 SMOKE_MAX_REQUESTS = 5
 SMOKE_MAX_CONCURRENCY = 2
 MAX_RAMP_STEPS = 20
@@ -104,6 +109,8 @@ class LoadConfig(BaseModel):
 def validate_suites(v: list[str]) -> list[str]:
     unique = list(dict.fromkeys(v))
     for suite in unique:
+        if suite in NOT_SUITES:
+            raise ValueError(NOT_SUITES[suite])
         if suite in PLANNED_SUITES:
             raise ValueError(
                 f"The {suite!r} suite arrives in Milestone {PLANNED_SUITES[suite]}; "
@@ -257,12 +264,33 @@ class CaseResultDetail(CaseResultRead):
 class MetricRead(BaseModel):
     run_model_id: uuid.UUID | None
     load_step: int | None
+    # Requested context length for context-window metrics (context.*); null otherwise.
+    context_length: int | None = None
     metric_name: str
     aggregation: str
     metric_value: float | None
     metric_unit: str
     sample_count: int
     metadata: dict[str, Any]
+
+
+class ResourceSampleRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    run_model_id: uuid.UUID
+    captured_at: datetime
+    offset_seconds: float
+    source: str
+    values: dict[str, Any]
+
+
+class RunTelemetry(BaseModel):
+    run_id: uuid.UUID
+    # Per model: {"configured", "samples", "failures", "last_error", "interval_seconds"}; absent
+    # when the model's endpoint has no exporter configured.
+    status: dict[str, dict[str, Any]]
+    items: list[ResourceSampleRead]
+    truncated: bool
 
 
 class RunMetrics(BaseModel):

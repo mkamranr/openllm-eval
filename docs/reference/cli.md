@@ -27,6 +27,7 @@ or `http://localhost:8000`. Most commands also accept `--json` for machine-reada
 | `openllm-eval dataset validate <file> [--type qa] [--format jsonl\|csv]` | Validate locally, without uploading |
 | `openllm-eval dataset import <file> [--name …] [--type …] [--to <dataset>] [--label …]` | Import a new dataset, or add a version with `--to` |
 | `openllm-eval dataset list` | Datasets with their current versions |
+| `openllm-eval dataset generate-needle --name … [--lengths 1024,4096,16384] [--depths 0.1,0.5,0.9] [--facts 1] [--repeats 1] [--seed 0]` | Generate a deterministic context-window dataset |
 
 ## Runs
 
@@ -34,7 +35,7 @@ or `http://localhost:8000`. Most commands also accept `--json` for machine-reada
 |---|---|
 | `openllm-eval run create --config run.yaml [--wait]` | Create a run. `--wait` follows progress until it finishes |
 | `openllm-eval run status <run-id> [--watch]` | Status and progress |
-| `openllm-eval run results <run-id>` | Performance, quality, tool, RAG, and hallucination metrics per model |
+| `openllm-eval run results <run-id>` | Performance, quality, tool, RAG, hallucination, and context-window metrics per model |
 | `openllm-eval run list [--limit 20]` | Recent runs |
 | `openllm-eval run cancel <run-id>` | Request cancellation |
 | `openllm-eval run rerun <run-id> [--wait]` | New run with the same configuration |

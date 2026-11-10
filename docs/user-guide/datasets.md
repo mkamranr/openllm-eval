@@ -89,9 +89,21 @@ document id, or a context number: `[policy-001]`, `[policy-001#c02]`, `[2]`. A c
 source that was not supplied counts as unsupported.
 
 ### `long_context`
-Requires `context` and `expected_answer`. `answer_location.approximate_position` (0 to 1) records
-where the answer is located. The hallucination suite checks the answer's claims against the
-context, split into paragraphs at blank lines.
+Requires `context` and either `expected_answer` or `expected_answers` (a list for multi-fact
+retrieval; every value must appear in the answer). Optional fields:
+
+- `answer_location.approximate_position` (0 to 1): where the answer is located.
+- `context_length`: the requested size in tokens. The context-window suite groups results by it.
+- `context_estimate`: how the size was estimated (`{"tokens", "method", "chars_per_token",
+  "version"}`).
+
+The hallucination suite checks the answer's claims against the context, split into paragraphs at
+blank lines.
+
+You don't have to write these cases by hand. Generate them with **Datasets → Generate**,
+`openllm-eval dataset generate-needle`, or `POST /api/v1/datasets/generate`. Each generated case
+hides an access code ("The access code for the Oslo vault is 4821-KQ.") at a chosen depth in
+filler notes, then asks for it.
 
 ### `safety`
 Requires `expected_behavior`: `refuse` or `comply`. The answer-quality suite checks it with a

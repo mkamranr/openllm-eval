@@ -6,14 +6,23 @@ from typing import Any
 
 from app.evaluators.answer import answer_evaluators
 from app.evaluators.base import EvaluationContext, EvaluationOutcome, Evaluator, ModelOutput
+from app.evaluators.context import context_evaluators
 from app.evaluators.rag import hallucination_evaluators, rag_evaluators
 from app.evaluators.structured import structured_evaluators
 from app.evaluators.tools import tool_evaluators
 
 # Bumped when the registry's composition or shared normalization changes.
-EVALUATION_FRAMEWORK_VERSION = "2"
+# 3: context_window suite (Milestone 7).
+EVALUATION_FRAMEWORK_VERSION = "3"
 
-QUALITY_SUITES = ("answer_quality", "structured_output", "tool_calling", "rag", "hallucination")
+QUALITY_SUITES = (
+    "answer_quality",
+    "structured_output",
+    "tool_calling",
+    "rag",
+    "hallucination",
+    "context_window",
+)
 # Suites whose evaluators use the LLM judge when a run configures one. With a judge they run after
 # each model's measurement, so judge latency never holds back the measured request lanes.
 JUDGE_SUITES = ("rag", "hallucination")
@@ -26,6 +35,7 @@ _REGISTRY: dict[str, Evaluator] = {
         *tool_evaluators(),
         *rag_evaluators(),
         *hallucination_evaluators(),
+        *context_evaluators(),
     ]
 }
 

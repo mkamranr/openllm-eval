@@ -7,6 +7,7 @@ from app.db.models.project import Project
 from app.db.models.report import Comparison, Report
 from app.db.models.run import (
     BenchmarkRun,
+    ResourceSample,
     RunAggregateMetric,
     RunCaseResult,
     RunDataset,
@@ -24,6 +25,7 @@ __all__ = [
     "ModelEndpoint",
     "Project",
     "Report",
+    "ResourceSample",
     "RunAggregateMetric",
     "RunCaseResult",
     "RunDataset",

@@ -30,7 +30,7 @@ The `internal` network has `internal: true`, so Postgres and Redis have no host 
 outbound access. The API and worker also join `egress`, because model endpoints usually live on
 other hosts.
 
-## Backend layout (Milestone 4)
+## Backend layout
 
 ```
 backend/app/
@@ -97,6 +97,23 @@ backend/app/reporting/    (Milestone 6)
 api/routes/reports.py     reports, comparisons, compare, rerun
 services/report_service.py
 ```
+
+```
+Milestone 7
+datasets/generators.py    deterministic needle / multi-fact context-window datasets
+evaluators/context.py     needle_retrieval evaluator, position buckets
+metrics/context.py        context.* metrics per requested context length
+schemas/model_metadata.py well-known model/deployment fields, TelemetryConfiguration
+telemetry/prometheus.py   Prometheus text parser; DCGM, nvidia_smi, vLLM → canonical keys
+telemetry/collector.py    background scraper during the measured phase; gpu.* metrics
+reporting/experiments.py  report sections: context window, resources, variant fields
+reporting/variants.py     comparison: deployment variants, warnings, per-length context
+```
+
+Context-window metrics are stored per requested length (`run_aggregate_metrics.context_length`).
+Telemetry runs as a separate task next to the measured requests: each scrape is checked against
+the network policy and stored as a `resource_samples` row. Any failure is counted and logged, and
+never reaches the run.
 
 Reports read only from the collected JSON, so every number in the HTML, CSV, or Markdown can be
 traced to the JSON export.

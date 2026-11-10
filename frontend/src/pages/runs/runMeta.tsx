@@ -75,7 +75,11 @@ export function fmtDuration(start: string | null, end: string | null): string {
 /** Quick lookup over aggregate metrics: get(modelId, name, aggregation, step?). */
 export function metricIndex(items: MetricValue[]) {
   const map = new Map<string, MetricValue>();
-  for (const m of items) map.set(`${m.run_model_id}|${m.load_step ?? ""}|${m.metric_name}|${m.aggregation}`, m);
+  for (const m of items) {
+    // Context-window rows repeat names per requested length; see contextIndex().
+    if (m.context_length != null) continue;
+    map.set(`${m.run_model_id}|${m.load_step ?? ""}|${m.metric_name}|${m.aggregation}`, m);
+  }
   return (modelId: string, name: string, aggregation: string, step: number | null = null) =>
     map.get(`${modelId}|${step ?? ""}|${name}|${aggregation}`);
 }

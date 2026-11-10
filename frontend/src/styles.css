@@ -584,3 +584,6 @@ textarea.code, .code-block { font-family: ui-monospace, SFMono-Regular, Menlo, C
 /* Compare and reports (M6) */
 .legend-key { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
 .plain-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+
+/* Milestone 7: resource telemetry sparkline */
+.sparkline { color: var(--primary); display: block; }

@@ -5,7 +5,8 @@
 #   API_URL=http://server:8000 FRONTEND_URL=http://server:3000 ./scripts/smoke-test.sh
 #
 # Checks: migrations exited 0, API liveness/readiness (DB + Redis + worker), version, dataset
-# import/export hash, frontend served, /api proxied and, with the mock model server, a benchmark run. Exits non-zero on the first failure.
+# import/export hash, frontend served, /api proxied and, with the mock model server, benchmark,
+# quality, RAG, report, comparison, and context-window + telemetry runs. Exits non-zero on the first failure.
 set -euo pipefail
 
 # Read published ports from .env (next to docker-compose.yml) unless URLs are given explicitly.
@@ -231,6 +232,53 @@ if [[ -n "$mock_running" || "${SMOKE_MOCK:-0}" == "1" ]]; then
     && pass "hallucination: claim-level metrics computed" || fail "hallucination.contradiction_rate metric"
   curl -sS -o /dev/null -X DELETE "$API_URL/api/v1/runs/$rag_run_id"
   curl -sS -o /dev/null -X DELETE "$API_URL/api/v1/datasets/$rag_ds_id"
+  # --- Context window + telemetry (M7): generated needle dataset, overflow above the mock's limit,
+  #     GPU metrics scraped from the mock's Prometheus /metrics page ---
+  MOCK_METRICS_URL="${MOCK_METRICS_URL:-${MOCK_BASE_URL%/v1}/metrics}"
+  ctx_ep_body="{\"name\":\"$name-ctx\",\"base_url\":\"$MOCK_BASE_URL\",\"model_identifier\":\"mock-model\","
+  ctx_ep_body+="\"request_configuration\":{\"headers\":{\"X-Mock-Mode\":\"needle\",\"X-Mock-Max-Context\":\"3000\",\"X-Mock-First-Token-Delay-Ms\":\"50\"}},"
+  ctx_ep_body+="\"model_metadata\":{\"family\":\"mock\",\"quantization_method\":\"none\",\"weight_bits\":16},"
+  ctx_ep_body+="\"telemetry\":{\"url\":\"$MOCK_METRICS_URL\",\"interval_seconds\":0.5}}"
+  ctx_ep="$(curl -sS -X POST "$API_URL/api/v1/endpoints" -H 'Content-Type: application/json' -d "$ctx_ep_body")"
+  ctx_ep_id="$(printf '%s' "$ctx_ep" | sed -n 's/^{"id":"\([0-9a-f-]*\)".*/\1/p')"
+  [[ -n "$ctx_ep_id" ]] || { echo "    response: $ctx_ep"; fail "register endpoint with telemetry (is this an API before M7?)"; }
+  ctx_ds="$(curl -sS -X POST "$API_URL/api/v1/datasets/generate" -H 'Content-Type: application/json' \
+    -d "{\"name\":\"smoke-needle-$RANDOM$RANDOM\",\"params\":{\"context_lengths\":[512,1024,4096],\"depths\":[0.1,0.5,0.9]}}")"
+  ctx_ds_id="$(printf '%s' "$ctx_ds" | sed -n 's/^{"id":"\([0-9a-f-]*\)".*/\1/p')"
+  [[ -n "$ctx_ds_id" ]] || { echo "    response: $ctx_ds"; fail "generate needle dataset"; }
+  printf '%s' "$ctx_ds" | grep -q '"record_count":9' && pass "generated needle dataset: 9 cases at 3 context lengths" \
+    || fail "generated dataset record count"
+  ctx_body="{\"name\":\"smoke-context\",\"endpoint_ids\":[\"$ctx_ep_id\"],\"datasets\":[{\"dataset_id\":\"$ctx_ds_id\"}],"
+  ctx_body+="\"suites\":[\"context_window\"],\"load\":{\"profile\":\"sequential\"}}"
+  ctx_run="$(curl -sS -X POST "$API_URL/api/v1/runs" -H 'Content-Type: application/json' -d "$ctx_body")"
+  ctx_run_id="$(printf '%s' "$ctx_run" | sed -n 's/^{"id":"\([0-9a-f-]*\)".*/\1/p')"
+  [[ -n "$ctx_run_id" ]] || { echo "    response: $ctx_run"; fail "create context-window run"; }
+  run_id="$ctx_run_id"
+  deadline=$((SECONDS + TIMEOUT_SECONDS))
+  status="$(run_status || true)"
+  until [[ "$status" =~ ^(completed|completed_with_errors|cancelled|failed)$ ]]; do
+    (( SECONDS >= deadline )) && fail "context run did not finish within ${TIMEOUT_SECONDS}s (status: $status)"
+    sleep 1
+    status="$(run_status || true)"
+  done
+  [[ "$status" == "completed_with_errors" ]] && pass "context run finished: 4096-token cases overflowed as expected" \
+    || fail "context run finished with status $status (expected completed_with_errors)"
+  ctx_metrics="$(curl -fsS "$API_URL/api/v1/runs/$ctx_run_id/metrics")"
+  printf '%s' "$ctx_metrics" | grep -Eq '"context_length":4096,"metric_name":"context.overflow_rate","aggregation":"ratio","metric_value":1(\.0)?,' \
+    && pass "context: overflow rate 100% at 4096 requested tokens (classified context_overflow)" || fail "context.overflow_rate at 4096"
+  printf '%s' "$ctx_metrics" | grep -Eq '"context_length":1024,"metric_name":"context.retrieval_accuracy","aggregation":"pass_rate","metric_value":1(\.0)?,' \
+    && pass "context: needle retrieval 100% at 1024 tokens" || fail "context.retrieval_accuracy at 1024"
+  printf '%s' "$ctx_metrics" | grep -q '"server_reported":3' \
+    && pass "context: actual input tokens are server-reported (kept apart from the estimate)" || fail "token count source"
+  if printf '%s' "$ctx_metrics" | grep -Eq '"metric_name":"gpu.memory_used_mb","aggregation":"max","metric_value":[0-9]'; then
+    pass "telemetry: GPU memory scraped from $MOCK_METRICS_URL"
+  else
+    curl -sS "$API_URL/api/v1/runs/$ctx_run_id/telemetry" | head -c 800; echo
+    fail "gpu.memory_used_mb missing (telemetry URL allowed by the network policy?)"
+  fi
+  curl -sS -o /dev/null -X DELETE "$API_URL/api/v1/runs/$ctx_run_id"
+  curl -sS -o /dev/null -X DELETE "$API_URL/api/v1/datasets/$ctx_ds_id"
+  curl -sS -o /dev/null -X DELETE "$API_URL/api/v1/endpoints/$ctx_ep_id"
   curl -sS -o /dev/null -X DELETE "$API_URL/api/v1/endpoints/$id"
   pass "smoke run, dataset and endpoint removed"
 else

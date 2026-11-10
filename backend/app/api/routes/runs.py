@@ -39,6 +39,7 @@ from app.schemas.run import (
     RunMetrics,
     RunRead,
     RunSummary,
+    RunTelemetry,
 )
 from app.services import run_service
 
@@ -154,6 +155,19 @@ async def get_result(
     run_id: uuid.UUID, result_id: uuid.UUID, session: AsyncSession = Depends(get_session)
 ) -> CaseResultDetail:
     return await run_service.get_result(session, run_id, result_id)
+
+
+@router.get(
+    "/runs/{run_id}/telemetry",
+    response_model=RunTelemetry,
+    summary="Resource telemetry samples (GPU memory, utilization, power, KV cache)",
+)
+async def run_telemetry(
+    run_id: uuid.UUID,
+    run_model_id: uuid.UUID | None = None,
+    session: AsyncSession = Depends(get_session),
+) -> RunTelemetry:
+    return await run_service.run_telemetry(session, run_id, run_model_id)
 
 
 @router.get("/runs/{run_id}/metrics", response_model=RunMetrics)

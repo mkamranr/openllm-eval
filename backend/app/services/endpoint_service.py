@@ -30,6 +30,7 @@ from app.schemas.endpoint import (
     EndpointUpdate,
     RequestConfiguration,
 )
+from app.schemas.model_metadata import TelemetryConfiguration
 from app.services.project_service import get_project
 
 
@@ -59,7 +60,13 @@ def _validate_fields(
     base_url: str,
     secret_reference: str | None,
     request_configuration: RequestConfiguration,
+    telemetry: TelemetryConfiguration | None = None,
 ) -> None:
+    if telemetry is not None:
+        try:
+            context.policy.validate_url(telemetry.url)
+        except DestinationBlockedError as exc:
+            raise _validation_error(str(exc), "telemetry.url") from None
     if not is_registered(adapter_type):
         raise _validation_error(
             f"Unknown adapter type '{adapter_type}'. Available: {sorted(adapter_classes())}",
@@ -115,6 +122,11 @@ def to_read(endpoint: ModelEndpoint, context: AdapterContext) -> EndpointRead:
     rc = RequestConfiguration.model_validate(endpoint.request_configuration or {})
     read = EndpointRead.model_validate(endpoint, from_attributes=True)
     read.request_configuration = rc
+    read.telemetry = (
+        TelemetryConfiguration.model_validate(endpoint.telemetry_configuration)
+        if endpoint.telemetry_configuration
+        else None
+    )
     read.secret_configured = (
         context.secrets.is_available(endpoint.secret_reference)
         if endpoint.secret_reference
@@ -175,6 +187,7 @@ async def create_endpoint(
         base_url=data.base_url,
         secret_reference=data.secret_reference,
         request_configuration=data.request_configuration,
+        telemetry=data.telemetry,
     )
     if data.project_id is not None:
         await get_project(session, data.project_id)
@@ -188,6 +201,7 @@ async def create_endpoint(
         request_configuration=data.request_configuration.model_dump(mode="json"),
         model_metadata=data.model_metadata,
         deployment_metadata=data.deployment_metadata,
+        telemetry_configuration=data.telemetry.model_dump(mode="json") if data.telemetry else None,
         tags=data.tags,
         enabled=data.enabled,
     )
@@ -236,6 +250,7 @@ async def update_endpoint(
         base_url=changes.get("base_url", endpoint.base_url),
         secret_reference=secret_reference,
         request_configuration=rc,
+        telemetry=data.telemetry if "telemetry" in changes else None,
     )
     if changes.get("project_id") is not None:
         await get_project(session, changes["project_id"])
@@ -245,6 +260,10 @@ async def update_endpoint(
             endpoint.request_configuration = rc.model_dump(mode="json")
         elif key == "secret_reference":
             endpoint.secret_reference = secret_reference
+        elif key == "telemetry":
+            endpoint.telemetry_configuration = (
+                data.telemetry.model_dump(mode="json") if data.telemetry else None
+            )
         else:
             setattr(endpoint, key, value)
     # Connection-relevant changes invalidate the previous test result.
@@ -283,6 +302,9 @@ async def clone_endpoint(
         request_configuration=dict(source.request_configuration or {}),
         model_metadata=dict(source.model_metadata or {}),
         deployment_metadata=dict(source.deployment_metadata or {}),
+        telemetry_configuration=dict(source.telemetry_configuration)
+        if source.telemetry_configuration
+        else None,
         tags=list(source.tags or []),
         enabled=source.enabled,
     )

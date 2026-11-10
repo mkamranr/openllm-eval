@@ -284,6 +284,46 @@ def dataset_list(
         typer.echo("  ".join(c.ljust(w) for c, w in zip(row, widths, strict=True)).rstrip())
 
 
+@dataset_app.command("generate-needle")
+def dataset_generate_needle(
+    name: str = typer.Option(..., "--name", help="New dataset name."),
+    lengths: str = typer.Option(
+        "1024,4096,16384", "--lengths", help="Requested context lengths in tokens, comma-separated."
+    ),
+    depths: str = typer.Option(
+        "0.1,0.5,0.9", "--depths", help="Needle positions (0 = start, 1 = end), comma-separated."
+    ),
+    facts: int = typer.Option(1, "--facts", help="Facts per case (more than 1 = multi-fact)."),
+    repeats: int = typer.Option(1, "--repeats", help="Cases per length and depth."),
+    seed: int = typer.Option(0, "--seed"),
+    api_url: str = typer.Option(None, "--api-url", help=API_URL_HELP),
+) -> None:
+    """Generate a synthetic context-window dataset (deterministic for the same options)."""
+    base = _base(api_url)
+    try:
+        params = {
+            "context_lengths": [int(x) for x in lengths.split(",") if x.strip()],
+            "depths": [float(x) for x in depths.split(",") if x.strip()],
+            "needles_per_case": facts,
+            "repeats": repeats,
+            "seed": seed,
+        }
+    except ValueError:
+        typer.echo("error: --lengths takes integers and --depths numbers", err=True)
+        raise typer.Exit(code=1) from None
+    body = _request(
+        "POST",
+        f"{base}/api/v1/datasets/generate",
+        timeout=300.0,
+        json={"name": name, "params": params},
+    )
+    version = body.get("current_version") or {}
+    typer.echo(
+        f"generated: {body['id']} | {version.get('record_count')} cases | "
+        f"sha256 {version.get('content_hash')}"
+    )
+
+
 @dataset_app.command("import")
 def dataset_import(
     path: Path = typer.Argument(..., exists=True, dir_okay=False, readable=True),
@@ -531,8 +571,14 @@ def _wait(base: str, run_id: str, interval: float, quiet: bool) -> dict[str, Any
 def _print_metrics(base: str, run: dict[str, Any]) -> None:
     metrics = _request("GET", f"{base}/api/v1/runs/{run['id']}/metrics")
     table: dict[str, dict[tuple[str, str], Any]] = {}
+    context: dict[str, dict[int, dict[tuple[str, str], Any]]] = {}
     for m in metrics["items"]:
-        if m["load_step"] is None:
+        if m.get("context_length") is not None:
+            key = (m["metric_name"], m["aggregation"])
+            context.setdefault(m["run_model_id"], {}).setdefault(m["context_length"], {})[key] = m[
+                "metric_value"
+            ]
+        elif m["load_step"] is None:
             key = (m["metric_name"], m["aggregation"])
             table.setdefault(m["run_model_id"], {})[key] = m["metric_value"]
     live = " (live)" if metrics["live"] else ""
@@ -556,6 +602,28 @@ def _print_metrics(base: str, run: dict[str, Any]) -> None:
             f"{_fmt(v.get(('request_throughput', 'value')), 2):>8}"
         )
     typer.echo("times in ms; n/a = not measurable (the API metadata says why)")
+    if context:
+        typer.echo("")
+        typer.echo("context window (by requested length; tokens = server-reported mean)")
+        typer.echo(
+            f"  {'model':<26}{'length':>9}{'ok %':>7}{'overflow':>9}{'retrieval':>10}"
+            f"{'TTFT p50':>10}{'tokens':>9}"
+        )
+        for model in run["models"]:
+            for length, v in sorted(context.get(model["id"], {}).items()):
+
+                def pct(key: tuple[str, str], v: dict = v) -> str:
+                    val = v.get(key)
+                    return f"{val * 100:.0f}%" if val is not None else "n/a"
+
+                typer.echo(
+                    f"  {model['name'][:25]:<26}{length:>9}"
+                    f"{pct(('context.success_rate', 'ratio')):>7}"
+                    f"{pct(('context.overflow_rate', 'ratio')):>9}"
+                    f"{pct(('context.retrieval_accuracy', 'pass_rate')):>10}"
+                    f"{_fmt(v.get(('context.ttft_ms', 'p50'))):>10}"
+                    f"{_fmt(v.get(('context.input_tokens', 'mean'))):>9}"
+                )
     quality = {
         mid: {
             k: val

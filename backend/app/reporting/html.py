@@ -13,8 +13,8 @@ from html import escape
 from typing import Any
 
 from app.metrics.stats import PERCENTILE_METHOD
-from app.reporting import charts
-from app.reporting.catalog import evaluator_of, family
+from app.reporting import charts, experiments
+from app.reporting.catalog import FAMILIES, evaluator_of, family
 from app.reporting.charts import Series, fmt
 
 CSS = """
@@ -69,7 +69,7 @@ def _t(value: Any) -> str:
 def _metric_index(data: dict[str, Any]) -> dict[str | None, dict[tuple[str, str], dict]]:
     idx: dict[str | None, dict[tuple[str, str], dict]] = defaultdict(dict)
     for m in data["metrics"]:
-        if m["load_step"] is None:
+        if m["load_step"] is None and m.get("context_length") is None:
             idx[m["run_model_id"]][(m["metric_name"], m["aggregation"])] = m
     return idx
 
@@ -252,7 +252,7 @@ def _all_metrics(data: dict[str, Any], idx) -> str:
     keys = sorted(
         {k for per in idx.values() for k in per},
         key=lambda k: (
-            ("performance", "quality", "tool", "rag", "hallucination").index(family(k[0])),
+            FAMILIES.index(family(k[0])),
             k,
         ),
     )
@@ -290,6 +290,9 @@ def _configuration(data: dict[str, Any]) -> str:
                     ("Adapter", f"{ep.get('adapter_type')} {ep.get('adapter_version') or ''}"),
                     ("Base URL", ep.get("base_url")),
                     ("Effective generation", gen),
+                    *experiments.variant_pairs(
+                        m["declared_model_metadata"], m["hardware_metadata"]
+                    ),
                     ("Declared model metadata", m["declared_model_metadata"] or "none declared"),
                     ("Hardware metadata", m["hardware_metadata"] or "none declared"),
                     ("Status", m["status"]),
@@ -465,9 +468,13 @@ def render_html(data: dict[str, Any]) -> str:
     repro = data["reproduction"]
     opts = data["options"]
     redactions = [k.replace("redact_", "") for k, v in opts.items() if v]
+    context_html = experiments.context_section(data)
+    telemetry_html = experiments.telemetry_section(data)
     sections = [
         ("summary", "Summary"),
         ("charts", "Charts"),
+        *([("context", "Context window")] if context_html else []),
+        *([("resources", "Resources")] if telemetry_html else []),
         ("metrics", "All metrics"),
         ("failures", "Failures"),
         ("configuration", "Configuration"),
@@ -497,6 +504,8 @@ def render_html(data: dict[str, Any]) -> str:
 <p class="muted">— means the value could not be measured; hover for the reason.</p>
 <h2 id="charts">Charts</h2>
 {_charts(data, idx)}
+{f'<h2 id="context">Context window</h2>{context_html}' if context_html else ''}
+{f'<h2 id="resources">Resources</h2>{telemetry_html}' if telemetry_html else ''}
 <h2 id="metrics">All metrics</h2>
 {_all_metrics(data, idx)}
 <h2 id="failures">Failures</h2>

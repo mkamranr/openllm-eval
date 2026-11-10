@@ -202,7 +202,7 @@ async def test_adapters_listed(api):
     assert {
         "adapter_type": "openai_compatible",
         "display_name": adapters[0]["display_name"],
-        "version": "1.0.0",
+        "version": "1.1.0",
     } in adapters
 
 

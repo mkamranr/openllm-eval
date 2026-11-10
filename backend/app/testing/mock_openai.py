@@ -10,7 +10,9 @@ Behaviour is controlled per request with headers, which can be set as endpoint c
 
 =============================  ==============================================================
 ``X-Mock-Mode``                ``echo`` (default), ``tool_call``, ``malformed``,
-                               ``stream_error``, ``no_usage``
+                               ``stream_error``, ``no_usage``, ``needle``
+``X-Mock-Needle-Reach``        ``needle`` mode: only facts in this leading share of the prompt
+                               are "seen" (0-1, default 1), to simulate lost-in-the-middle
 ``X-Mock-Response``            fixed response text
 ``X-Mock-Status``              force an HTTP error status (e.g. 429, 500)
 ``X-Mock-First-Token-Delay-Ms``  delay before the first content chunk (stream) or response
@@ -21,6 +23,9 @@ Behaviour is controlled per request with headers, which can be set as endpoint c
                                user message contains this text
 ``X-Mock-Fail-First``          fail the first N requests for each distinct last user message,
                                then succeed (exercises retries)
+``X-Mock-Max-Context``         reject prompts estimated (4 characters per token) above this many
+                               tokens with HTTP 400, like a server's context-length error
+``X-Mock-Prompt-Token-Cap``    report at most this many prompt tokens (simulates truncation)
 =============================  ==============================================================
 
 After a tool call, a request whose last message has role ``tool`` gets a plain-text answer
@@ -31,6 +36,10 @@ Scripted answers make quality evaluations deterministic: a JSON list of entries
 "after_tools": "..."}``. The first entry whose ``match`` occurs in the last user message wins;
 ``after_tools`` answers the follow-up request after tool results. Scripts take precedence over
 ``X-Mock-Mode``.
+
+``GET /metrics`` serves Prometheus text in the DCGM exporter and vLLM formats (one fake GPU
+whose memory and utilization rise with the requests in flight), for telemetry tests. Disable it
+with ``MOCK_METRICS=0``.
 
 ``POST /v1/embeddings`` returns deterministic bag-of-words vectors (64 dimensions), so texts with
 the same words are identical and unrelated texts are dissimilar.
@@ -103,6 +112,19 @@ def _last_user_text(messages: list[dict[str, Any]]) -> str:
 EMBEDDING_DIMENSIONS = 64
 
 
+_NEEDLE = re.compile(r"The access code for the (\w+) vault is ([0-9A-Z-]+)\.")
+
+
+def _needle_answer(prompt: str, reach: float) -> str:
+    """Answer generated needle questions from the facts the "model" can see."""
+    limit = int(len(prompt) * reach)
+    seen = {m.group(1): m.group(2) for m in _NEEDLE.finditer(prompt) if m.start() < limit}
+    question = prompt.rsplit("\n\n", 1)[-1]
+    asked = [p for p in re.findall(r"\b([A-Z][a-z]+)\b", question) if p in seen]
+    codes = [seen[p] for p in dict.fromkeys(asked)]
+    return ", ".join(codes) if codes else "I could not find that in the notes."
+
+
 def _embedding(text: str) -> list[float]:
     vector = [0.0] * EMBEDDING_DIMENSIONS
     for word in re.findall(r"\w+", text.casefold()):
@@ -131,6 +153,8 @@ def create_mock_app(
     ]
     api_key = api_key if api_key is not None else os.environ.get("MOCK_API_KEY") or None
     attempts: dict[str, int] = {}
+    in_flight = {"n": 0, "total": 0}
+    metrics_enabled = os.environ.get("MOCK_METRICS", "1") != "0"
     script = script if script is not None else _load_script()
     app = FastAPI(title="OpenLLM-Eval mock OpenAI-compatible server", docs_url=None, redoc_url=None)
 
@@ -142,6 +166,30 @@ def create_mock_app(
     @app.get("/health")
     async def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/metrics")
+    async def metrics() -> Response:
+        if not metrics_enabled:
+            return _error(404, "Not found", "not_found_error")
+        n = in_flight["n"]
+        used = 8000 + 1500 * n
+        text = "\n".join(
+            [
+                "# HELP DCGM_FI_DEV_FB_USED Framebuffer memory used (in MiB).",
+                "# TYPE DCGM_FI_DEV_FB_USED gauge",
+                f'DCGM_FI_DEV_FB_USED{{gpu="0",modelName="Mock GPU"}} {used}',
+                f'DCGM_FI_DEV_FB_FREE{{gpu="0",modelName="Mock GPU"}} {40960 - used}',
+                f'DCGM_FI_DEV_GPU_UTIL{{gpu="0",modelName="Mock GPU"}} {min(100, 20 + 30 * n)}',
+                f'DCGM_FI_DEV_POWER_USAGE{{gpu="0",modelName="Mock GPU"}} {90 + 40 * n}.5',
+                'DCGM_FI_DEV_GPU_TEMP{gpu="0",modelName="Mock GPU"} 55',
+                f'vllm:gpu_cache_usage_perc{{model_name="mock"}} {min(1.0, 0.05 + 0.1 * n):.3f}',
+                f'vllm:num_requests_running{{model_name="mock"}} {n}',
+                'vllm:num_requests_waiting{model_name="mock"} 0',
+                f'vllm:request_success_total{{model_name="mock"}} {in_flight["total"]}',
+                "",
+            ]
+        )
+        return Response(text, media_type="text/plain; version=0.0.4")
 
     @app.get("/v1/models")
     async def list_models(request: Request) -> Response:
@@ -209,6 +257,18 @@ def create_mock_app(
         if not isinstance(messages, list) or not messages:
             return _error(400, "messages must be a non-empty list", "invalid_request_error")
 
+        max_context = request.headers.get("x-mock-max-context", "")
+        if max_context.isdigit():
+            chars = sum(len(str(m.get("content") or "")) for m in messages if isinstance(m, dict))
+            estimated = max(1, round(chars / 4))
+            if estimated > int(max_context):
+                return _error(
+                    400,
+                    f"This model's maximum context length is {max_context} tokens. However, you "
+                    f"requested {estimated} tokens in the messages. Please reduce the length of "
+                    "the messages.",
+                    "invalid_request_error",
+                )
         fail_status = request.headers.get("x-mock-fail-status", "503")
         fail_status = int(fail_status) if fail_status.isdigit() else 503
         last_user = _last_user_text(messages)
@@ -260,6 +320,12 @@ def create_mock_app(
                 text = str(entry.get("response", ""))
         elif after_tool:
             text = f"Based on the tool result: {str(messages[-1].get('content', ''))[:200]}"
+        elif mode == "needle":
+            try:
+                reach = float(request.headers.get("x-mock-needle-reach", "1"))
+            except ValueError:
+                reach = 1.0
+            text = _needle_answer(last_user, min(1.0, max(0.0, reach)))
         elif mode == "tool_call":
             tools = body.get("tools") or []
             name = request.headers.get("x-mock-tool-name") or (
@@ -280,6 +346,9 @@ def create_mock_app(
             words = words[:max_tokens]
 
         prompt_tokens = _word_count(messages)
+        cap = request.headers.get("x-mock-prompt-token-cap", "")
+        if cap.isdigit():
+            prompt_tokens = min(prompt_tokens, int(cap))
         completion_tokens = 0 if tool_call else len(words)
         usage = (
             None
@@ -297,7 +366,12 @@ def create_mock_app(
         finish = "tool_calls" if tool_call else "stop"
 
         if not body.get("stream"):
-            await asyncio.sleep(first_delay)
+            in_flight["n"] += 1
+            try:
+                await asyncio.sleep(first_delay)
+            finally:
+                in_flight["n"] -= 1
+                in_flight["total"] += 1
             if mode == "malformed":
                 return Response("{not valid json", media_type="application/json")
             message: dict[str, Any] = {
@@ -330,6 +404,15 @@ def create_mock_app(
             return f"data: {json.dumps(data)}\n\n"
 
         async def events() -> AsyncIterator[str]:
+            in_flight["n"] += 1
+            try:
+                async for event in _events():
+                    yield event
+            finally:
+                in_flight["n"] -= 1
+                in_flight["total"] += 1
+
+        async def _events() -> AsyncIterator[str]:
             # Role-only first event, sent immediately: this is NOT the first token.
             yield chunk({"role": "assistant", "content": ""})
             await asyncio.sleep(first_delay)

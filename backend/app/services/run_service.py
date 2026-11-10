@@ -27,6 +27,7 @@ from app.db.models.run import (
     RESULT_FAILED,
     TERMINAL_STATUSES,
     BenchmarkRun,
+    ResourceSample,
     RunAggregateMetric,
     RunCaseResult,
     RunDataset,
@@ -54,6 +55,7 @@ from app.schemas.run import (
     GenerationConfig,
     LoadConfig,
     MetricRead,
+    ResourceSampleRead,
     RunCreate,
     RunDatasetRead,
     RunDetail,
@@ -61,6 +63,7 @@ from app.schemas.run import (
     RunModelRead,
     RunRead,
     RunSummary,
+    RunTelemetry,
 )
 from app.services.project_service import get_project
 
@@ -128,6 +131,7 @@ def endpoint_snapshot(
         "effective_generation": effective,
         "model_metadata": endpoint.model_metadata or {},
         "deployment_metadata": endpoint.deployment_metadata or {},
+        "telemetry": endpoint.telemetry_configuration,
         "tags": list(endpoint.tags or []),
         "last_test_status": endpoint.last_test_status,
         "captured_at": utcnow().isoformat(),
@@ -751,6 +755,7 @@ async def run_metrics(session: AsyncSession, run_id: uuid.UUID) -> RunMetrics:
             MetricRead(
                 run_model_id=r["run_model_id"],
                 load_step=r["load_step"],
+                context_length=r.get("context_length"),
                 metric_name=r["metric_name"],
                 aggregation=r["aggregation"],
                 metric_value=r["metric_value"],
@@ -772,6 +777,7 @@ async def run_metrics(session: AsyncSession, run_id: uuid.UUID) -> RunMetrics:
             MetricRead(
                 run_model_id=m.run_model_id,
                 load_step=m.load_step,
+                context_length=m.context_length,
                 metric_name=m.metric_name,
                 aggregation=m.aggregation,
                 metric_value=m.metric_value,
@@ -786,4 +792,34 @@ async def run_metrics(session: AsyncSession, run_id: uuid.UUID) -> RunMetrics:
         live=live,
         metrics_version=run.configuration_snapshot.get("metrics_version", METRICS_VERSION),
         items=items,
+    )
+
+
+TELEMETRY_MAX_SAMPLES = 20_000
+
+
+async def run_telemetry(
+    session: AsyncSession, run_id: uuid.UUID, run_model_id: uuid.UUID | None = None
+) -> RunTelemetry:
+    run = await get_run(session, run_id)
+    query = select(ResourceSample).where(ResourceSample.run_id == run_id)
+    if run_model_id is not None:
+        query = query.where(ResourceSample.run_model_id == run_model_id)
+    rows = (
+        await session.scalars(
+            query.order_by(ResourceSample.run_model_id, ResourceSample.offset_seconds).limit(
+                TELEMETRY_MAX_SAMPLES + 1
+            )
+        )
+    ).all()
+    status = {
+        str(rm.id): dict((rm.progress or {}).get("telemetry"))
+        for rm in run.models
+        if (rm.progress or {}).get("telemetry")
+    }
+    return RunTelemetry(
+        run_id=run.id,
+        status=status,
+        items=[ResourceSampleRead.model_validate(r) for r in rows[:TELEMETRY_MAX_SAMPLES]],
+        truncated=len(rows) > TELEMETRY_MAX_SAMPLES,
     )

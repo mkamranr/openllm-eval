@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.config import Settings
 from app.core.exceptions import AppError, NotFoundError
+from app.datasets import generators
 from app.datasets.samples import LICENSE as SAMPLE_LICENSE
 from app.datasets.samples import SAMPLES
 from app.datasets.samples import SOURCE as SAMPLE_SOURCE
@@ -699,3 +700,27 @@ async def install_sample(
         sample_id=sample.sample_id,
         license_=SAMPLE_LICENSE,
     )
+
+
+async def generate_dataset(
+    session: AsyncSession, settings: Settings, request: generators.GenerateRequest
+) -> DatasetRead:
+    """Create a synthetic context-window dataset (deterministic for the same parameters)."""
+    try:
+        cases = generators.generate_needle_cases(request.params)
+    except ValueError as exc:
+        raise AppError(str(exc), code="validation_error", status_code=422) from None
+    description = generators.describe(request.params)
+    if request.description:
+        description = f"{request.description}\n\n{description}"
+    data = DatasetCreate(
+        name=request.name,
+        description=description,
+        project_id=request.project_id,
+        dataset_type="long_context",
+        tags=list(dict.fromkeys([*request.tags, "generated", "context-window"])),
+        filename="generated-needle.jsonl",
+        version_label=f"needle v{generators.GENERATOR_VERSION} seed {request.params.seed}",
+    )
+    raw = generators.to_jsonl(cases).encode("utf-8")
+    return await create_dataset(session, settings, data, raw, source="generated")

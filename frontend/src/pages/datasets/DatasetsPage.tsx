@@ -7,13 +7,14 @@ import { useAsync } from "../../hooks/useAsync";
 import { api } from "../../services/api";
 import type { SampleDataset } from "../../types/api";
 import { DATASET_TYPE_META, DATASET_TYPES, shortHash, typeLabel } from "./datasetMeta";
+import { GeneratePanel } from "./GeneratePanel";
 import { ImportPanel } from "./ImportPanel";
 
-type Tab = "mine" | "samples" | "import";
+type Tab = "mine" | "samples" | "import" | "generate";
 
 export function DatasetsPage() {
   const [params, setParams] = useSearchParams();
-  const tab = (["mine", "samples", "import"].includes(params.get("tab") ?? "") ? params.get("tab") : "mine") as Tab;
+  const tab = (["mine", "samples", "import", "generate"].includes(params.get("tab") ?? "") ? params.get("tab") : "mine") as Tab;
   const setTab = (t: Tab) => setParams(t === "mine" ? {} : { tab: t }, { replace: true });
   const navigate = useNavigate();
 
@@ -80,6 +81,7 @@ export function DatasetsPage() {
             { key: "mine", label: "My datasets", count: datasets.data?.total },
             { key: "samples", label: "Built-in samples", count: samples.data?.length },
             { key: "import", label: "Import" },
+            { key: "generate", label: "Generate" },
           ]}
         />
 
@@ -215,6 +217,17 @@ export function DatasetsPage() {
                   </article>
                 );
               })}
+            </div>
+          </TabPanel>
+        )}
+
+        {tab === "generate" && (
+          <TabPanel id="generate">
+            <div style={{ maxWidth: 820 }}>
+              <GeneratePanel
+                projects={projects.data?.items ?? []}
+                onCreated={(d) => navigate(`/datasets/${d.id}`, { state: { created: true } })}
+              />
             </div>
           </TabPanel>
         )}

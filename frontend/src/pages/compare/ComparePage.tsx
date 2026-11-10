@@ -15,6 +15,7 @@ import type {
 } from "../../types/reports";
 import type { Run } from "../../types/runs";
 import { fmt, fmtMs, fmtPct, isTerminal } from "../runs/runMeta";
+import { VariantsCard } from "./VariantsCard";
 
 export const COMPARABILITY: Record<Comparability, { label: string; tone: string; text: string }> = {
   equivalent_configuration: {
@@ -35,7 +36,7 @@ export const COMPARABILITY: Record<Comparability, { label: string; tone: string;
 };
 
 const SEVERITY_TONE: Record<Severity, string> = { critical: "error", major: "warn", minor: "neutral", info: "neutral" };
-const FAMILIES = ["all", "performance", "quality", "tool", "rag", "hallucination"] as const;
+const FAMILIES = ["all", "performance", "quality", "tool", "rag", "hallucination", "context", "resources"] as const;
 type Family = (typeof FAMILIES)[number];
 const COLORS = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#6250d6", "#e34948"];
 
@@ -374,6 +375,7 @@ export function ComparePage() {
             <Callout tone="info">Only one model selected: add another run to see differences.</Callout>
           )}
           <DifferencesCard result={result} />
+          <VariantsCard result={result} formatValue={formatValue} />
           <MetricsCard result={result} />
           <TransitionsCard result={result} />
           <Card title="Export and save" icon={Download}>

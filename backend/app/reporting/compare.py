@@ -28,7 +28,8 @@ from app.db.models.run import (
     RunAggregateMetric,
     RunCaseResult,
 )
-from app.reporting.catalog import direction, evaluator_of, family
+from app.reporting import variants
+from app.reporting.catalog import FAMILIES, direction, evaluator_of, family
 from app.reporting.exports import _csv_value
 
 MAX_RUNS = 10
@@ -253,6 +254,8 @@ async def compare(
                 RunAggregateMetric.run_id.in_(run_ids),
                 RunAggregateMetric.load_step.is_(None),
                 RunAggregateMetric.run_model_id.is_not(None),
+                # Context-window rows repeat names per requested length; compared separately.
+                RunAggregateMetric.context_length.is_(None),
             )
         )
     ).all()
@@ -263,7 +266,7 @@ async def compare(
     for (name, agg), per in sorted(
         by_key.items(),
         key=lambda kv: (
-            ("performance", "quality", "tool", "rag", "hallucination").index(family(kv[0][0])),
+            FAMILIES.index(family(kv[0][0])),
             kv[0],
         ),
     ):
@@ -393,6 +396,24 @@ async def compare(
         )
 
     comparability = differences(subjects, base_id)
+    context_rows = [
+        {
+            "subject_id": str(m.run_model_id),
+            "context_length": m.context_length,
+            "metric_name": m.metric_name,
+            "aggregation": m.aggregation,
+            "metric_value": m.metric_value,
+            "unavailable_reason": (m.metadata_ or {}).get("unavailable_reason"),
+        }
+        for m in await session.scalars(
+            select(RunAggregateMetric).where(
+                RunAggregateMetric.run_id.in_(run_ids),
+                RunAggregateMetric.run_model_id.is_not(None),
+                RunAggregateMetric.context_length.is_not(None),
+            )
+        )
+    ]
+    deployment_variants = variants.build(subjects, metrics, context_rows, base_id)
     notes = [
         "Deltas are differences from the baseline. No statistical significance test is applied.",
         "Per-case transitions use the first measured request of each case and completed "
@@ -412,6 +433,7 @@ async def compare(
         "comparability": comparability,
         "metrics": metrics,
         "transitions": transitions,
+        "variants": deployment_variants,
         "notes": notes,
     }
 

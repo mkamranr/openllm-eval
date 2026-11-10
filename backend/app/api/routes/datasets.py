@@ -11,6 +11,7 @@ from app.api.deps import get_app_settings, get_session
 from app.api.uploads import read_upload
 from app.core.config import Settings
 from app.core.exceptions import AppError
+from app.datasets.generators import GenerateRequest
 from app.datasets.schema import CASE_TYPES
 from app.schemas.common import Page
 from app.schemas.dataset import (
@@ -101,6 +102,20 @@ async def install_sample(
     settings: Settings = Depends(get_app_settings),
 ) -> DatasetRead:
     return await dataset_service.install_sample(session, settings, sample_id, project_id)
+
+
+@router.post(
+    "/datasets/generate",
+    response_model=DatasetRead,
+    status_code=status.HTTP_201_CREATED,
+    summary="Generate a synthetic context-window dataset (needle / multi-fact retrieval)",
+)
+async def generate_dataset(
+    body: GenerateRequest,
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_app_settings),
+) -> DatasetRead:
+    return await dataset_service.generate_dataset(session, settings, body)
 
 
 @router.get("/datasets/case-types", summary="Supported case types")

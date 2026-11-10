@@ -26,6 +26,7 @@ import type {
   RunCreate,
   RunDetail,
   RunMetrics,
+  RunTelemetry,
   RunStatus,
   RunSummary,
 } from "../types/runs";
@@ -168,6 +169,19 @@ export const api = {
       }>,
     ) => request<Dataset>(`/datasets/${id}`, json("PATCH", data)),
     remove: (id: string) => request<void>(`/datasets/${id}`, { method: "DELETE" }),
+    generate: (data: {
+      name: string;
+      description?: string | null;
+      project_id?: string | null;
+      tags?: string[];
+      params: {
+        context_lengths: number[];
+        depths?: number[];
+        needles_per_case?: number;
+        repeats?: number;
+        seed?: number;
+      };
+    }) => request<Dataset>("/datasets/generate", json("POST", { generator: "needle", ...data })),
     duplicate: (id: string, name?: string) =>
       request<Dataset>(`/datasets/${id}/duplicate`, json("POST", name ? { name } : {})),
     versions: (id: string) => request<DatasetVersion[]>(`/datasets/${id}/versions`),
@@ -221,6 +235,7 @@ export const api = {
     ) => request<Page<CaseResult>>(`/runs/${id}/results${query(params)}`),
     result: (id: string, resultId: string) => request<CaseResultDetail>(`/runs/${id}/results/${resultId}`),
     metrics: (id: string) => request<RunMetrics>(`/runs/${id}/metrics`),
+    telemetry: (id: string) => request<RunTelemetry>(`/runs/${id}/telemetry`),
     eventsUrl: (id: string) => `${API_BASE}/runs/${id}/events`,
     rerun: (id: string) => request<RunDetail>(`/runs/${id}/rerun`, { method: "POST" }),
   },

@@ -65,7 +65,7 @@ export interface ComparedMetric {
   metric_name: string;
   aggregation: string;
   unit: string;
-  family: "performance" | "quality" | "tool" | "rag" | "hallucination";
+  family: "performance" | "quality" | "tool" | "rag" | "hallucination" | "context" | "resources";
   evaluator: string | null;
   better: "higher" | "lower" | null;
   values: ComparedValue[];
@@ -103,7 +103,34 @@ export interface ComparisonResult {
   };
   metrics: ComparedMetric[];
   transitions: Transition[];
+  /** Deployment variants (quantization); absent in comparisons saved before Milestone 7. */
+  variants?: Variants;
   notes: string[];
+}
+
+export interface VariantField {
+  key: string;
+  label: string;
+  group: "model" | "deployment";
+  /** null = not declared (unknown). */
+  values: Record<string, unknown>;
+  differs: boolean;
+  unknown_for: string[];
+  all_known: boolean;
+}
+
+export interface Variants {
+  fields: VariantField[];
+  warnings: { level: "warning" | "info"; message: string }[];
+  key_metrics: (ComparedMetric & { label: string })[];
+  context_lengths: number[];
+  context: {
+    context_length: number;
+    label: string;
+    metric_name: string;
+    aggregation: string;
+    values: Record<string, { value: number | null; unavailable_reason: string | null }>;
+  }[];
 }
 
 export interface SavedComparison {

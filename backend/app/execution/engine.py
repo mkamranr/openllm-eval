@@ -75,9 +75,11 @@ from app.evaluators.registry import JUDGE_SUITES, QUALITY_SUITES, evaluate_case,
 from app.evaluators.tools import needs_simulation, simulate_tool_result
 from app.execution.plan import Step, steps_of
 from app.execution.prompting import build_request
+from app.metrics import context as context_metrics
 from app.metrics import performance, quality
 from app.metrics.stats import percentile
 from app.schemas.endpoint import RequestConfiguration
+from app.telemetry.collector import TelemetryCollector, telemetry_metrics
 
 logger = get_logger(__name__)
 
@@ -207,6 +209,8 @@ class ModelState:
     pending_judge: list[tuple[uuid.UUID, CaseSpec, ModelOutput]] = field(default_factory=list)
     judge_planned: int = 0
     judge_completed: int = 0
+    # Resource telemetry status (only when the endpoint configures an exporter).
+    telemetry: dict[str, Any] | None = None
 
     def progress(self) -> dict[str, Any]:
         finals = list(self.finals.values())
@@ -232,6 +236,7 @@ class ModelState:
             "elapsed_s": round(elapsed, 3) if elapsed is not None else None,
             "judge_planned": self.judge_planned,
             "judge_completed": self.judge_completed,
+            **({"telemetry": dict(self.telemetry)} if self.telemetry is not None else {}),
             # Live indications from results so far; final metrics come from aggregation.
             "live": {
                 "latency_ms_p50": percentile(latencies, 50),
@@ -536,6 +541,13 @@ class RunExecutor:
                 "message_count": len(req.messages),
                 "tool_count": len(req.tools or []),
                 "prompt_chars": spec.prompt_chars,
+                # Context-window experiments: the requested size and the size estimate, kept
+                # apart from the server-reported input tokens (performance_metrics).
+                "context_length": spec.case.get("context_length"),
+                "estimated_input_tokens": (spec.case.get("context_estimate") or {}).get("tokens")
+                or max(1, round(spec.prompt_chars / 4)),
+                "token_estimator": (spec.case.get("context_estimate") or {}).get("method")
+                or "heuristic",
                 "retryable_error": response.error.retryable if response.error else None,
             },
             "response_data": {
@@ -935,6 +947,28 @@ class RunExecutor:
         if not work.cancelled() and work.exception() is not None:
             raise work.exception()  # type: ignore[misc]
 
+    def _telemetry_for(self, rm: RunModel, state: ModelState) -> TelemetryCollector | None:
+        """Start scraping the endpoint's exporter, if one is configured. Never raises."""
+        try:
+            if state.telemetry is None:
+                state.telemetry = dict((rm.progress or {}).get("telemetry") or {})
+            collector = TelemetryCollector.from_snapshot(
+                rm.endpoint_snapshot,
+                self.context.policy,
+                self.factory,
+                rm.run_id,
+                rm.id,
+                state.telemetry,
+            )
+            if collector is None:
+                state.telemetry = state.telemetry or None
+                return None
+            collector.start()
+            return collector
+        except Exception as exc:  # telemetry never fails the run
+            logger.warning("telemetry_start_failed", run_model_id=str(rm.id), error=str(exc)[:300])
+            return None
+
     def _todo(self, state: ModelState, indices: Iterable[int], retry_failed: bool) -> list[int]:
         out = []
         for i in indices:
@@ -987,11 +1021,16 @@ class RunExecutor:
 
         state.phase = PHASE_MEASURED
         state.measured_started = time.monotonic()
-        for st, indices, duration in work:
-            state.current_step = st.step
-            state.current_concurrency = st.concurrency
-            deadline = time.monotonic() + duration if duration else None
-            await self._pool(state, indices, st.concurrency, st.step, deadline)
+        collector = self._telemetry_for(rm, state)
+        try:
+            for st, indices, duration in work:
+                state.current_step = st.step
+                state.current_concurrency = st.concurrency
+                deadline = time.monotonic() + duration if duration else None
+                await self._pool(state, indices, st.concurrency, st.step, deadline)
+        finally:
+            if collector is not None:
+                await collector.stop()
         await self._judge_phase(state)
         state.phase = "done"
         self._model_status[rm.id] = "completed"
@@ -1243,6 +1282,12 @@ async def compute_metric_rows(
         if quality_suites:
             for m in await quality_metrics(session, rm.id, observations):
                 rows.append(_metric_row(run.id, rm.id, None, m))
+        for length, m in context_metrics.compute(await context_observations(session, rm.id)):
+            row = _metric_row(run.id, rm.id, None, m)
+            row["context_length"] = length
+            rows.append(row)
+        for m in await telemetry_metrics(session, rm):
+            rows.append(_metric_row(run.id, rm.id, None, m))
         groups: list[tuple[int | None, list[performance.Observation], int | None]] = [
             (None, observations, load.get("requests"))
         ]
@@ -1277,6 +1322,7 @@ async def compute_metric_rows(
                         # ORM attribute name (the column is "metadata").
                         "metadata_": meta,
                         "created_at": utcnow(),
+                        "context_length": None,
                     }
                 )
     return rows, {"failed_requests": failed, "not_completed": not_completed, "errors": errors}
@@ -1357,7 +1403,69 @@ def _metric_row(
         "sample_count": m.sample_count,
         "metadata_": dict(m.metadata),
         "created_at": utcnow(),
+        "context_length": None,
     }
+
+
+async def context_observations(
+    session: AsyncSession, run_model_id: uuid.UUID
+) -> list[context_metrics.ContextObservation]:
+    """Final measured requests of cases that declare a requested context length."""
+    rows = (
+        await session.execute(
+            select(
+                RunCaseResult.id,
+                RunCaseResult.status,
+                RunCaseResult.error_type,
+                RunCaseResult.latency_ms,
+                RunCaseResult.ttft_ms,
+                RunCaseResult.performance_metrics,
+                RunCaseResult.request_metadata,
+            ).where(
+                RunCaseResult.run_model_id == run_model_id,
+                RunCaseResult.phase == PHASE_MEASURED,
+                RunCaseResult.is_final.is_(True),
+            )
+        )
+    ).all()
+    rows = [r for r in rows if (r.request_metadata or {}).get("context_length")]
+    if not rows:
+        return []
+    needle: dict[uuid.UUID, tuple[bool | None, float | None, str | None]] = {}
+    for rid, status, passed, score, meta in await session.execute(
+        select(
+            EvaluationResult.run_case_result_id,
+            EvaluationResult.status,
+            EvaluationResult.passed,
+            EvaluationResult.score,
+            EvaluationResult.metadata_,
+        ).where(
+            EvaluationResult.run_model_id == run_model_id,
+            EvaluationResult.evaluator_name == "needle_retrieval",
+        )
+    ):
+        if status == "completed":
+            needle[rid] = (passed, score, (meta or {}).get("position_bucket"))
+    out = []
+    for r in rows:
+        perf, req = r.performance_metrics or {}, r.request_metadata or {}
+        retrieved, recall, bucket = needle.get(r.id, (None, None, None))
+        out.append(
+            context_metrics.ContextObservation(
+                context_length=int(req["context_length"]),
+                succeeded=r.status == RESULT_SUCCEEDED,
+                error_type=r.error_type,
+                latency_ms=r.latency_ms,
+                ttft_ms=r.ttft_ms,
+                input_tokens=perf.get("input_tokens"),
+                token_source=perf.get("token_count_source") or "unavailable",
+                estimated_tokens=req.get("estimated_input_tokens"),
+                retrieved=retrieved,
+                recall=recall,
+                position_bucket=bucket,
+            )
+        )
+    return out
 
 
 async def quality_metrics(

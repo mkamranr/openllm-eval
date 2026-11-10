@@ -37,7 +37,8 @@ change goes through Alembic (`backend/app/db/migrations`). Common conventions:
 | `secret_reference` | varchar(256), nullable | `env:OPENLLM_SECRET_*`; **never** the key |
 | `request_configuration` | jsonb | Timeouts, retries, generation defaults, streaming, TLS, headers, secret header references |
 | `model_metadata` | jsonb | Declared by the user or the server; not verified |
-| `deployment_metadata` | jsonb | Declared backend, GPU, quantization, …; recorded with runs |
+| `deployment_metadata` | jsonb | Declared backend, GPU, …; recorded with runs. The API type-checks well-known keys (no schema change; see the API reference) |
+| `telemetry_configuration` | jsonb, nullable (migration `0007`) | Optional Prometheus exporter: `url`, `interval_seconds`, `gpu_indices`, `timeout_seconds` |
 | `tags` | jsonb (list) | |
 | `enabled` | boolean | |
 | `last_test_status` | varchar(32), nullable | `ok` / `failed`; `NULL` = never tested. Cleared when connection settings change |
@@ -131,7 +132,22 @@ retry-failed), `load_step`, `is_final` (the attempt that decided the request), `
 `run_id`, `run_model_id`, `load_step` (NULL means the whole run; ramp runs also get one row per
 step), `metric_name`, `aggregation` (for example `p95`, `mean`, `value`, `ratio`),
 `metric_value` (**nullable**: unavailable is never stored as 0), `metric_unit`, `sample_count`,
-and `metadata` (definition, method, and the reason when unavailable).
+and `metadata` (definition, method, and the reason when unavailable). `context_length`
+(nullable, migration `0007`) is the requested context length of `context.*` rows. Every other
+row has NULL, so consumers that index by (name, aggregation) filter on it.
+
+### `resource_samples` (migration `0007`)
+
+One row per telemetry scrape, with these columns:
+
+- `run_id`, `run_model_id`: both cascade delete and are indexed.
+- `captured_at`.
+- `offset_seconds`: seconds since the model's measured phase started.
+- `source`: `prometheus`.
+- `values`: canonical keys such as `gpu_memory_used_mb`, `gpu_utilization_pct`, `gpu_power_w`,
+  and `kv_cache_usage_pct`, plus a `gpus` list with per-device values.
+
+Scrape status (samples, failures, last error) is kept in `run_models.progress.telemetry`.
 
 ### `evaluation_profiles` (migration `0005`)
 

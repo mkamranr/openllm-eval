@@ -1,4 +1,4 @@
-import { Cpu, KeyRound, Network, Server, SlidersHorizontal } from "lucide-react";
+import { Activity, Cpu, KeyRound, Layers3, Network, Server, SlidersHorizontal } from "lucide-react";
 import { useState, type FormEvent, type ReactNode } from "react";
 
 import { Callout, Drawer, Switch } from "../../components/ui";
@@ -6,7 +6,18 @@ import { ApiError, api } from "../../services/api";
 import type { AdapterInfo, Endpoint, EndpointInput, Project } from "../../types/api";
 import { KeyValueEditor, fromPairs, toPairs, type KeyValue } from "./KeyValueEditor";
 
-const SUGGESTED_METADATA = ["backend", "gpu", "quantization", "max_model_len"];
+const SUGGESTED_METADATA = ["serving_backend", "gpu_type", "gpu_count", "max_model_len"];
+
+/** Declared model-variant fields (backend: app/schemas/model_metadata.py). Blank = unknown. */
+export const VARIANT_FIELDS = [
+  { key: "family", label: "Model family", placeholder: "llama-3.1-8b", hint: "Same family = same base weights" },
+  { key: "quantization_method", label: "Quantization method", placeholder: "AWQ, GPTQ, GGUF Q4_K_M, none" },
+  { key: "weight_precision", label: "Weight precision", placeholder: "fp16, bf16, int8, int4" },
+  { key: "weight_bits", label: "Weight bits", placeholder: "16, 8, 4", numeric: true },
+  { key: "kv_cache_dtype", label: "KV cache dtype", placeholder: "auto, fp8" },
+] as const;
+type VariantKey = (typeof VARIANT_FIELDS)[number]["key"];
+const VARIANT_KEYS: readonly string[] = VARIANT_FIELDS.map((f) => f.key);
 
 interface FormState {
   name: string;
@@ -28,6 +39,10 @@ interface FormState {
   headers: KeyValue[];
   secret_headers: KeyValue[];
   deployment: KeyValue[];
+  variant: Record<VariantKey, string>;
+  telemetry_url: string;
+  telemetry_interval: string;
+  telemetry_gpus: string;
   tags: string;
   enabled: boolean;
 }
@@ -59,12 +74,34 @@ function initialState(endpoint?: Endpoint): FormState {
     headers: toPairs(rc?.headers),
     secret_headers: toPairs(rc?.secret_headers),
     deployment,
+    variant: Object.fromEntries(
+      VARIANT_FIELDS.map((f) => {
+        const v = endpoint?.model_metadata?.[f.key];
+        return [f.key, v == null ? "" : String(v)];
+      }),
+    ) as Record<VariantKey, string>,
+    telemetry_url: endpoint?.telemetry?.url ?? "",
+    telemetry_interval: num(endpoint?.telemetry?.interval_seconds, "2"),
+    telemetry_gpus: (endpoint?.telemetry?.gpu_indices ?? []).join(", "),
     tags: (endpoint?.tags ?? []).join(", "),
     enabled: endpoint?.enabled ?? true,
   };
 }
 
 const optionalNumber = (v: string): number | null => (v.trim() === "" ? null : Number(v));
+
+/** Keeps undeclared extra keys; blank variant fields are left out (unknown, never ""). */
+function modelMetadata(s: FormState, existing?: Endpoint): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(existing?.model_metadata ?? {})) {
+    if (!VARIANT_KEYS.includes(k)) out[k] = v;
+  }
+  for (const f of VARIANT_FIELDS) {
+    const v = s.variant[f.key].trim();
+    if (v) out[f.key] = "numeric" in f && f.numeric && /^\d+$/.test(v) ? Number(v) : v;
+  }
+  return out;
+}
 
 export function toPayload(s: FormState, existing?: Endpoint): EndpointInput {
   return {
@@ -89,8 +126,20 @@ export function toPayload(s: FormState, existing?: Endpoint): EndpointInput {
       headers: fromPairs(s.headers),
       secret_headers: fromPairs(s.secret_headers),
     },
-    model_metadata: existing?.model_metadata ?? {},
+    model_metadata: modelMetadata(s, existing),
     deployment_metadata: fromPairs(s.deployment),
+    telemetry: s.telemetry_url.trim()
+      ? {
+          enabled: true,
+          source: "prometheus",
+          url: s.telemetry_url.trim(),
+          interval_seconds: Number(s.telemetry_interval || "2"),
+          timeout_seconds: existing?.telemetry?.timeout_seconds ?? 2,
+          gpu_indices: s.telemetry_gpus.trim()
+            ? s.telemetry_gpus.split(",").map((g) => Number(g.trim())).filter((g) => g.toString() !== "NaN")
+            : null,
+        }
+      : null,
     tags: s.tags
       .split(",")
       .map((t) => t.trim())
@@ -326,11 +375,48 @@ export function EndpointForm({
             hint="Non-secret headers only. Credentials belong in secret headers." />
         </Section>
 
+        <Section icon={Layers3} title="Model variant (declared)">
+          <p className="small muted" style={{ margin: 0 }}>
+            Used to compare quantized variants. Leave a field blank when you don't know it: it stays unknown and is never
+            guessed from the model name.
+          </p>
+          <div className="form-row">
+            {VARIANT_FIELDS.map((f) => (
+              <Field key={f.key} label={f.label} htmlFor={`ep-variant-${f.key}`}
+                hint={"hint" in f ? f.hint : undefined}>
+                <input id={`ep-variant-${f.key}`} className="input" value={state.variant[f.key]}
+                  placeholder={f.placeholder} inputMode={"numeric" in f ? "numeric" : undefined}
+                  onChange={(e) => set("variant", { ...state.variant, [f.key]: e.target.value })} />
+              </Field>
+            ))}
+          </div>
+          {errors.model_metadata && (
+            <span className="field-error" role="alert">{errors.model_metadata}</span>
+          )}
+        </Section>
+
+        <Section icon={Activity} title="Resource telemetry (optional)">
+          <Field label="Exporter URL" htmlFor="ep-telemetry_url" error={errors["telemetry.url"] ?? errors.telemetry}
+            hint="Prometheus text endpoint: NVIDIA DCGM exporter (:9400/metrics), nvidia_gpu_exporter, or vLLM /metrics. Scraped while the model is measured; failures never fail a run.">
+            <input {...input("telemetry_url", "telemetry.url")} placeholder="http://gpu-host:9400/metrics" />
+          </Field>
+          <div className="form-row">
+            <Field label="Scrape interval (s)" htmlFor="ep-telemetry_interval"
+              error={errors["telemetry.interval_seconds"]} hint="0.5 to 60">
+              <input {...input("telemetry_interval", "telemetry.interval_seconds")} inputMode="decimal" />
+            </Field>
+            <Field label="GPU indices" htmlFor="ep-telemetry_gpus" error={errors["telemetry.gpu_indices"]}
+              hint="Comma-separated; blank = all GPUs on the page">
+              <input {...input("telemetry_gpus", "telemetry.gpu_indices")} placeholder="0, 1" />
+            </Field>
+          </div>
+        </Section>
+
         <Section icon={Cpu} title="Deployment metadata (declared)">
           <KeyValueEditor label="Deployment metadata" pairs={state.deployment}
-            onChange={(v) => set("deployment", v)} keyPlaceholder="gpu"
+            onChange={(v) => set("deployment", v)} keyPlaceholder="gpu_type"
             valuePlaceholder="RTX 4090" addLabel="Add field" error={errors.deployment_metadata}
-            hint="What you know about how this model is served. Recorded with every run; not verified." />
+            hint="What you know about how this model is served (e.g. serving_backend, backend_version, gpu_type, gpu_count, tensor_parallel_size, max_model_len). Recorded with every run; not verified." />
           <Field label="Tags" htmlFor="ep-tags" error={errors.tags} hint="Comma-separated">
             <input {...input("tags")} placeholder="local, gpu, int8" />
           </Field>

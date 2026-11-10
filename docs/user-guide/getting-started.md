@@ -191,6 +191,45 @@ from run to run.
 From the CLI: `openllm-eval report generate <run-id> -f html` and
 `openllm-eval compare <run-a> <run-b>`.
 
+## 9. Context-window and quantization experiments
+
+**Context window.** Generate a needle dataset (**Datasets → Generate**): choose the requested
+context lengths, the needle depths, and a seed. Keep the lengths within your server's
+`max_model_len`, or overflow is all you will measure. Run the dataset with the **Context
+window** evaluation type.
+
+For each requested length, the run page shows the success and overflow rates, TTFT, and needle
+retrieval (overall and by early, middle, or late position). It also shows three token counts,
+kept apart:
+
+- the requested length;
+- the estimate (4 characters per token);
+- the input tokens the server reported.
+
+When the server reports far fewer tokens than estimated, the result is flagged as possible
+truncation. A request that succeeds at a length doesn't prove the model uses that much context,
+so read retrieval alongside it.
+
+**Quantization.** Register one endpoint per variant (for example FP16, AWQ 4-bit, GGUF Q4). On
+each, fill in **Model variant (declared)**: model family, quantization method, weight precision
+and bits, and KV-cache dtype. Leave unknown fields blank: they stay unknown and are never guessed
+from the model name. Run the same datasets on every variant, then compare the runs.
+
+The **Deployment variants** card shows:
+
+- the declared settings side by side;
+- quality and performance next to each other;
+- context-window results per length;
+- warnings when the variants aren't comparable (different family, undeclared quantization,
+  different datasets).
+
+**GPU telemetry (optional).** To see memory savings, add a Prometheus exporter URL under
+**Resource telemetry** on the endpoint. You can use the NVIDIA DCGM exporter
+(`http://gpu-host:9400/metrics`), nvidia_gpu_exporter, or vLLM's own `/metrics` for KV-cache
+usage. Allow the exporter's host in the network policy (`ENDPOINT_ALLOWED_HOSTS`). It is scraped
+while the model is measured. If it is missing or fails, the run continues and the GPU metrics
+show why they are unavailable.
+
 ## Next steps
 
 - Automate runs with the [CLI](../reference/cli.md).

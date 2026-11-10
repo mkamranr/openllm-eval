@@ -252,15 +252,17 @@ function TypesStep({
               <span className="sc-meta">
                 {IMPLEMENTED_TYPES.includes(t.key)
                   ? <span className="badge badge-ok">Available</span>
-                  : <span className="badge badge-neutral">Milestone {t.milestone}</span>}
+                  : t.compareOnly
+                    ? <span className="badge badge-info">Compare runs</span>
+                    : <span className="badge badge-neutral">Milestone {t.milestone}</span>}
               </span>
             </button>
           );
         })}
       </div>
       <p className="small muted" style={{ margin: 0 }}>
-        Types marked Available run today; performance metrics are recorded on every run. Other badges show the milestone
-        that implements them; you can select them now and they are kept in your draft.
+        Types marked Available run today; performance metrics are recorded on every run. Quantization is measured by
+        comparing runs of the same datasets on each variant endpoint (declare the quantization in the endpoint metadata).
       </p>
       {qualityTypes.length > 0 && (
         <QualitySettingsForm value={draft.quality} types={qualityTypes} endpoints={endpoints}
@@ -459,7 +461,8 @@ function ReviewStep({
   const runnable = draft.evaluationTypes.filter((k) => IMPLEMENTED_TYPES.includes(k));
   const perf = runnable.length > 0;
   const quality = runnable.filter((k) => QUALITY_TYPES.includes(k));
-  const later = draft.evaluationTypes.filter((k) => !IMPLEMENTED_TYPES.includes(k));
+  const later = draft.evaluationTypes.filter((k) => !IMPLEMENTED_TYPES.includes(k) && !evaluationType(k)?.compareOnly);
+  const compareOnly = draft.evaluationTypes.filter((k) => evaluationType(k)?.compareOnly);
   const embedding = endpoints.find((e) => e.id === draft.quality.embeddingEndpointId);
   const judge = endpoints.find((e) => e.id === draft.quality.judgeEndpointId);
   const p = draft.performance;
@@ -500,6 +503,12 @@ function ReviewStep({
                 </dd>
               </div>
             )}
+            {runnable.includes("context_window") && (
+              <div>
+                <dt>Context window</dt>
+                <dd>Results grouped by each case's requested context length (long_context cases; generate them on the Datasets page)</dd>
+              </div>
+            )}
             {models.length > 1 && <div><dt>Order</dt><dd>Models run one after another, so they don't compete for the server.</dd></div>}
           </dl>
         </section>
@@ -537,6 +546,12 @@ function ReviewStep({
           milestone and {later.length === 1 ? "is" : "are"} not part of this run.
         </Callout>
       ) : null}
+      {compareOnly.length > 0 && (
+        <Callout tone="info">
+          Quantization is not a separate suite: run the same datasets on each variant endpoint (with the quantization declared
+          in its model metadata), then open <Link to="/compare">Compare</Link> to see the deployment variants side by side.
+        </Callout>
+      )}
       <SaveProfile draft={draft} />
     </div>
   );

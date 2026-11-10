@@ -97,7 +97,11 @@ async def metrics_of(api, run_id, model_index=0, step=None):
     data = (await api.get(f"/api/v1/runs/{run_id}/metrics")).json()
     out: dict[str, dict] = {}
     for m in data["items"]:
-        if m["run_model_id"] == rm_id and m["load_step"] == step:
+        if (
+            m["run_model_id"] == rm_id
+            and m["load_step"] == step
+            and m.get("context_length") is None
+        ):
             out.setdefault(m["metric_name"], {})[m["aggregation"]] = m
     return data, out
 
@@ -469,7 +473,7 @@ async def test_create_validation(api, mock_server):
         assert resp.status_code == 422, resp.text
         return json.dumps(resp.json()["error"]["details"])
 
-    assert "Milestone 7" in await rejected(suites=["performance", "quantization"])
+    assert "compared across runs" in await rejected(suites=["performance", "quantization"])
     assert "concurrency 1" in await rejected(load={"profile": "sequential", "concurrency": 4})
     assert "at most 5" in await rejected(load={"profile": "smoke", "requests": 10})
     assert "two concurrency steps" in await rejected(

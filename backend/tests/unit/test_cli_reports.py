@@ -129,3 +129,27 @@ def test_rerun(monkeypatch):
     patch_api(monkeypatch, {("POST", f"/api/v1/runs/{RUN}/rerun"): (201, {"id": RUN2})})
     result = runner.invoke(cli.app, ["run", "rerun", RUN])
     assert result.exit_code == 0 and RUN2 in result.output
+
+
+def test_dataset_generate_needle(monkeypatch):
+    calls = patch_api(
+        monkeypatch,
+        {
+            ("POST", "/api/v1/datasets/generate"): (
+                201,
+                {"id": "d1", "current_version": {"record_count": 6, "content_hash": "abc"}},
+            )
+        },
+    )
+    result = runner.invoke(
+        cli.app,
+        ["dataset", "generate-needle", "--name", "n", "--lengths", "1024,2048", "--seed", "3"],
+    )
+    assert result.exit_code == 0, result.output
+    assert "6 cases" in result.output
+    body = calls[0][2]["json"]
+    assert body["params"]["context_lengths"] == [1024, 2048]
+    assert body["params"]["depths"] == [0.1, 0.5, 0.9]
+    assert body["params"]["seed"] == 3
+    bad = runner.invoke(cli.app, ["dataset", "generate-needle", "--name", "n", "--lengths", "x"])
+    assert bad.exit_code == 1

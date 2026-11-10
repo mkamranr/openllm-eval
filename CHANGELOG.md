@@ -6,6 +6,71 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added — Milestone 7 (context-window and quantization experiments)
+- **Context-window suite** (`context_window`): cases carry the *requested* context length, and
+  results are grouped by it. Per length: requests, success rate, overflow rate, out-of-memory
+  rate, TTFT and latency p50/p95, estimated input tokens, **server-reported** input tokens (with
+  their `token_count_source`), the actual / estimated ratio, suspected truncation (the server
+  reports under 50% of the estimate), needle retrieval accuracy (overall and by early / middle /
+  late position), and multi-fact recall. Requested, estimated, and actual sizes are always kept
+  apart. The evaluation framework version is now `3`.
+- **Needle dataset generator**: `POST /datasets/generate` builds deterministic
+  needle-in-a-haystack and multi-fact retrieval datasets (requested lengths of 128 to 524,288
+  tokens, depths, facts per case, repeats, seed). Sizes are estimated at 4 characters per token,
+  and each case records the estimator. The same parameters always give the same content hash.
+  `long_context` cases accept `expected_answers` (multi-fact), `context_length`, and
+  `context_estimate`.
+- New evaluator `needle_retrieval`: passes when all expected values appear in the answer. The
+  score is the share found, the label is retrieved / partial / missed, and the position bucket
+  comes from `answer_location`.
+- Adapter `openai_compatible` 1.1.0 classifies server errors as `context_overflow` (not
+  retried) or `out_of_memory`, using only the server's message.
+- **Structured endpoint metadata**: the well-known model fields (family, revision,
+  parameter_count, quantization_method, weight_precision, weight_bits, activation_precision,
+  kv_cache_dtype) and deployment fields (serving_backend, backend_version, gpu_type, gpu_count,
+  gpu_memory_gb, tensor/pipeline parallel size, max_model_len, gpu_memory_utilization,
+  max_num_seqs, max_num_batched_tokens, server_args, driver/CUDA version, cpu, ram_gb) are
+  type-checked. Blank values are dropped, so unknown stays unknown. Nothing is inferred from
+  model names.
+- **Optional GPU telemetry**: an endpoint can name a Prometheus exporter (`telemetry.url`):
+  NVIDIA DCGM exporter, nvidia_gpu_exporter, or vLLM `/metrics`. It is scraped every
+  `interval_seconds` while the model is measured. Samples go to `resource_samples` and become
+  `gpu.memory_used_mb` (max, mean), `gpu.memory_total_mb`, `gpu.utilization_pct`, `gpu.power_w`,
+  `gpu.temperature_c`, `gpu.kv_cache_usage_pct`, and `telemetry.samples`. A missing or failing
+  exporter never fails a run; its metrics are null, with the reason.
+- **Deployment variants** in comparisons:
+  - declared settings per model, with undeclared ones shown as unknown;
+  - warnings when the model family differs or is unknown, quantization is not declared, the
+    datasets differ, or no telemetry was collected;
+  - key quality, latency, throughput, and GPU metrics side by side;
+  - context-window metrics per requested length.
+
+  Quantization itself is not a suite: run the same datasets on each variant, then compare the
+  runs.
+- Reports gain a **Context window** section (retrieval accuracy and TTFT by requested length;
+  requested, estimated, and server-reported tokens) and a **Resources** section (GPU memory,
+  utilization, power, and KV cache over time). The configuration section lists the variant
+  fields, including unknown ones.
+- Migration `0007`: `run_aggregate_metrics.context_length`,
+  `model_endpoints.telemetry_configuration`, and the `resource_samples` table.
+- API: `POST /datasets/generate` and `GET /runs/{id}/telemetry`; `telemetry` on endpoints,
+  `context_length` on metric rows, and `variants` in comparison results.
+- CLI: `dataset generate-needle`. `run results` prints the context-window table.
+- UI:
+  - a Generate tab on Datasets;
+  - model-variant and telemetry fields on the endpoint form;
+  - Context window and Resource telemetry cards on the run page;
+  - a Deployment variants card on Compare;
+  - the Context window evaluation type in the wizard.
+- Mock server: `X-Mock-Mode: needle`, `X-Mock-Needle-Reach`, `X-Mock-Max-Context`,
+  `X-Mock-Prompt-Token-Cap`, and a fake DCGM / vLLM `GET /metrics` page.
+
+### Security — Milestone 7
+- Telemetry URLs pass the same outbound network policy as model endpoints: they are validated
+  when saved and checked before every scrape. Redirects are not followed, proxy variables are
+  ignored, responses are capped at 4 MB, and URLs with embedded credentials are rejected.
+  `redact_endpoints` also hides telemetry URLs in reports.
+
 ### Added — Milestone 6 (reports and comparison)
 - Reports for finished runs, in five formats: a self-contained **HTML report** (no scripts and
   no external resources, so it works offline; light and dark themes), a **JSON export** (all

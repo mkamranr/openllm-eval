@@ -130,7 +130,7 @@ and served by nginx. See the [architecture overview](docs/architecture/overview.
 - [x] **M4** Deterministic evaluators, tool calling, evaluation profiles
 - [x] **M5** RAG and evidence evaluation, optional LLM judge, hallucination indicators
 - [x] **M6** Run comparison, reports, and exports
-- [ ] **M7** Quantization and context-window studies
+- [x] **M7** Quantization and context-window studies
 
 See the [CHANGELOG](CHANGELOG.md) for details.
 

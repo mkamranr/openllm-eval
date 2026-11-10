@@ -349,12 +349,29 @@ export interface CaseResultDetail extends Omit<CaseResult, "evaluations"> {
 export interface MetricValue {
   run_model_id: string | null;
   load_step: number | null;
+  /** Requested context length for context.* metrics; null for every other metric. */
+  context_length?: number | null;
   metric_name: string;
   aggregation: string;
   metric_value: number | null;
   metric_unit: string;
   sample_count: number;
   metadata: Record<string, unknown> & { unavailable_reason?: string; definition?: string; concurrency?: number };
+}
+
+export interface ResourceSample {
+  run_model_id: string;
+  captured_at: string;
+  offset_seconds: number;
+  source: string;
+  values: Record<string, unknown>;
+}
+
+export interface RunTelemetry {
+  run_id: string;
+  status: Record<string, { configured?: boolean; samples?: number; failures?: number; last_error?: string | null }>;
+  items: ResourceSample[];
+  truncated: boolean;
 }
 
 export interface RunMetrics {

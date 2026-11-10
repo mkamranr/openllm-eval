@@ -34,6 +34,8 @@ class ModelEndpoint(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     deployment_metadata: Mapped[dict[str, Any]] = mapped_column(
         JSONType, nullable=False, default=dict
     )
+    # Optional GPU telemetry source scraped while this endpoint is measured (Milestone 7).
+    telemetry_configuration: Mapped[dict[str, Any] | None] = mapped_column(JSONType, nullable=True)
     tags: Mapped[list[str]] = mapped_column(JSONType, nullable=False, default=list)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     last_test_status: Mapped[str | None] = mapped_column(String(32), nullable=True)

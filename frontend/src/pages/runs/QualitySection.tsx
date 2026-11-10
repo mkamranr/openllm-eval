@@ -14,6 +14,7 @@ export const SUITE_TITLES: Record<string, string> = {
   tool_calling: "Tool calling",
   rag: "RAG",
   hallucination: "Hallucination",
+  context_window: "Context window",
 };
 
 /** Titles and descriptions for evaluator names (falls back to the name). */

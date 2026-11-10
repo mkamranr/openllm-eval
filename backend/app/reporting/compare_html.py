@@ -32,6 +32,105 @@ def _signed(v: float | None, unit: str) -> str:
     return ("+" if v > 0 else "") + fmt(v, unit)
 
 
+def _variants(result: dict[str, Any], head: str) -> str:
+    v = result.get("variants")
+    if not v:
+        return ""
+    subjects = result["subjects"]
+    out = ["<h2>Deployment variants</h2>"]
+    out.append(
+        '<p class="muted">Quantization and serving settings as declared on each endpoint. '
+        "Undeclared values are unknown; nothing is inferred from model names.</p>"
+    )
+    if v["warnings"]:
+        out.append(
+            '<ul class="warnings">'
+            + "".join(
+                f'<li class="{_t(w["level"])}">{_t(w["message"])}</li>' for w in v["warnings"]
+            )
+            + "</ul>"
+        )
+    rows = "".join(
+        f"<tr><td>{_t(f['label'])}</td><td>{_t(f['group'])}</td>"
+        + "".join(
+            '<td class="muted">unknown</td>'
+            if f["values"].get(s["id"]) is None
+            else f"<td>{_t(_value(f['values'][s['id']]))}</td>"
+            for s in subjects
+        )
+        + "</tr>"
+        for f in v["fields"]
+    )
+    out.append(
+        '<div class="scroll"><table aria-label="Declared variant settings"><thead><tr>'
+        f"<th>Setting</th><th>Declared on</th>{head}</tr></thead><tbody>{rows}</tbody></table></div>"
+    )
+    if v["key_metrics"]:
+        rows = "".join(
+            f"<tr><td>{_t(m['label'])}</td><td>{_t(m['aggregation'])}</td>"
+            + "".join(
+                f'<td class="n muted" title="{_t(x["unavailable_reason"] or "")}">—</td>'
+                if x["value"] is None
+                else f'<td class="n">{_t(fmt(x["value"], m["unit"]))}</td>'
+                for x in m["values"]
+            )
+            + "</tr>"
+            for m in v["key_metrics"]
+        )
+        out.append(
+            '<h3>Quality and performance</h3><div class="scroll"><table aria-label="Variant '
+            f'key metrics"><thead><tr><th>Metric</th><th>Aggregation</th>{head}</tr></thead>'
+            f"<tbody>{rows}</tbody></table></div>"
+        )
+    if v["context"]:
+        lengths = v["context_lengths"]
+        acc = {
+            (c["context_length"]): c
+            for c in v["context"]
+            if c["metric_name"] == "context.retrieval_accuracy"
+        }
+        series = [
+            (
+                s["label"],
+                s["index"],
+                [
+                    ((acc.get(n) or {}).get("values") or {}).get(s["id"], {}).get("value")
+                    for n in lengths
+                ],
+            )
+            for s in subjects
+        ]
+        out.append("<h3>Context window</h3>")
+        if acc:
+            out.append(
+                "<figure>"
+                + charts.grouped_bars(
+                    [f"{n:,}" for n in lengths],
+                    series,
+                    "Retrieval accuracy by requested context length",
+                    "accuracy",
+                )
+                + "</figure>"
+            )
+        rows = "".join(
+            f"<tr><td class='n'>{c['context_length']:,}</td><td>{_t(c['label'])}</td>"
+            + "".join(
+                f'<td class="n muted" title="{_t(x["unavailable_reason"] or "")}">—</td>'
+                if (x := c["values"][s["id"]])["value"] is None
+                else f'<td class="n">{_t(fmt(x["value"], "ms" if c["metric_name"].endswith("_ms") else "tokens" if "tokens" in c["metric_name"] else "ratio"))}</td>'
+                for s in subjects
+            )
+            + "</tr>"
+            for c in v["context"]
+        )
+        out.append(
+            '<div class="scroll"><table aria-label="Context-window metrics"><thead><tr>'
+            f"<th>Requested tokens</th><th>Metric</th>{head}</tr></thead><tbody>{rows}</tbody>"
+            "</table></div>"
+        )
+    return "".join(out)
+
+
 def render_comparison_html(result: dict[str, Any], title: str = "Run comparison") -> str:
     subjects = result["subjects"]
     base_id = result["baseline_subject_id"]
@@ -103,6 +202,7 @@ def render_comparison_html(result: dict[str, Any], title: str = "Run comparison"
 <h2>Metrics</h2>
 <div class="scroll"><table aria-label="Metrics"><thead><tr><th>Metric</th><th>Aggregation</th>
 <th>Better</th>{head}</tr></thead><tbody>{''.join(metric_rows)}</tbody></table></div>
+{_variants(result, head)}
 <h2>Per-case changes</h2>
 {''.join(trans) or '<p class="empty">Only one model selected.</p>'}
 <h2>Notes</h2><ul>{''.join(f'<li>{_t(n)}</li>' for n in result['notes'])}</ul>

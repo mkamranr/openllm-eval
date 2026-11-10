@@ -63,6 +63,7 @@ import {
   metricTitle,
   progressOf,
 } from "./runMeta";
+import { ContextCard, TelemetryCard } from "./ExperimentsSection";
 import { ReportsCard } from "./ReportsCard";
 import { ProgressBar } from "./RunsPage";
 
@@ -821,6 +822,8 @@ export function RunDetailPage() {
       {metrics && <QualityCard run={run} get={get} />}
       {metrics && <ToolMetricsCard run={run} get={get} />}
       {metrics && <EvidenceMetricsCard run={run} get={get} />}
+      {metrics && <ContextCard run={run} items={metrics.items} />}
+      {metrics && <TelemetryCard run={run} get={get} />}
 
       <Card title="Results" icon={ListChecks}>
         <ResultsBrowser run={run} version={resultsVersion} />

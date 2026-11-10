@@ -33,6 +33,15 @@ export interface RequestConfiguration {
   secret_headers: Record<string, string>;
 }
 
+export interface TelemetryConfiguration {
+  enabled: boolean;
+  source: "prometheus";
+  url: string;
+  interval_seconds: number;
+  gpu_indices: number[] | null;
+  timeout_seconds: number;
+}
+
 export interface Endpoint {
   id: string;
   project_id: string | null;
@@ -45,6 +54,8 @@ export interface Endpoint {
   request_configuration: RequestConfiguration;
   model_metadata: Record<string, unknown>;
   deployment_metadata: Record<string, unknown>;
+  /** Optional Prometheus exporter scraped while the model is measured (GPU memory, KV cache). */
+  telemetry?: TelemetryConfiguration | null;
   tags: string[];
   enabled: boolean;
   last_test_status: "ok" | "failed" | null;

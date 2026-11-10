@@ -19,6 +19,8 @@ export interface EvaluationType {
   icon: LucideIcon;
   /** Milestone that implements it (spec §17). */
   milestone: number;
+  /** Not a suite: done by comparing runs (shown with a pointer to Compare). */
+  compareOnly?: boolean;
   /** Dataset types that feed it; empty = any dataset. */
   datasetTypes: DatasetType[];
 }
@@ -75,15 +77,16 @@ export const EVALUATION_TYPES: EvaluationType[] = [
   {
     key: "quantization",
     title: "Quantization",
-    description: "Compare FP16, INT8, 4-bit variants of the same model.",
+    description: "Compare FP16, INT8, 4-bit variants: run the same datasets on each variant, then compare the runs.",
     icon: Layers3,
     milestone: 7,
+    compareOnly: true,
     datasetTypes: [],
   },
   {
     key: "context_window",
     title: "Context window",
-    description: "Needle retrieval and quality as context length grows.",
+    description: "Needle retrieval, overflow and latency by requested context length.",
     icon: ScrollText,
     milestone: 7,
     datasetTypes: ["long_context"],
@@ -100,4 +103,5 @@ export const IMPLEMENTED_TYPES = [
   "tool_calling",
   "rag",
   "hallucination",
+  "context_window",
 ];

@@ -23,6 +23,7 @@ from app.db.models.run import (
     PHASE_MEASURED,
     RESULT_SUCCEEDED,
     BenchmarkRun,
+    ResourceSample,
     RunAggregateMetric,
     RunCaseResult,
 )
@@ -120,6 +121,38 @@ def reproduction(run: BenchmarkRun) -> dict[str, Any]:
     }
 
 
+TELEMETRY_MAX_POINTS = 2000
+
+
+async def _telemetry(session: AsyncSession, run: BenchmarkRun) -> dict[str, Any]:
+    """Per model with telemetry: its status and samples (evenly thinned to at most
+    TELEMETRY_MAX_POINTS; per-GPU detail is left out of the report)."""
+    out: dict[str, Any] = {}
+    for rm in run.models:
+        status = (rm.progress or {}).get("telemetry")
+        rows = (
+            await session.execute(
+                select(ResourceSample.offset_seconds, ResourceSample.values)
+                .where(ResourceSample.run_model_id == rm.id)
+                .order_by(ResourceSample.offset_seconds)
+            )
+        ).all()
+        if not rows and not status:
+            continue
+        step = max(1, -(-len(rows) // TELEMETRY_MAX_POINTS))
+        out[str(rm.id)] = {
+            "status": status,
+            "samples": [
+                {
+                    "offset_seconds": offset,
+                    "values": {k: v for k, v in (values or {}).items() if k != "gpus"},
+                }
+                for offset, values in rows[::step]
+            ],
+        }
+    return out
+
+
 def _redact_snapshot(snap: dict[str, Any], redact_endpoints: bool) -> dict[str, Any]:
     out = copy.deepcopy(snap)
     if redact_endpoints:
@@ -130,6 +163,8 @@ def _redact_snapshot(snap: dict[str, Any], redact_endpoints: bool) -> dict[str, 
             if isinstance(ep, dict):
                 ep["base_url"] = "[redacted]"
                 (ep.get("request_configuration") or {}).pop("headers", None)
+                if isinstance(ep.get("telemetry"), dict):
+                    ep["telemetry"]["url"] = "[redacted]"
     return out
 
 
@@ -137,6 +172,7 @@ def _metric_row(m: RunAggregateMetric) -> dict[str, Any]:
     return {
         "run_model_id": str(m.run_model_id) if m.run_model_id else None,
         "load_step": m.load_step,
+        "context_length": m.context_length,
         "metric_name": m.metric_name,
         "aggregation": m.aggregation,
         "metric_value": m.metric_value,
@@ -268,10 +304,12 @@ async def collect(
     snap = run.configuration_snapshot
     models = []
     for rm in run.models:
-        ep = dict(rm.endpoint_snapshot)
+        ep = copy.deepcopy(rm.endpoint_snapshot)
         if redact_endpoints:
             ep["base_url"] = "[redacted]"
             (ep.get("request_configuration") or {}).pop("headers", None)
+            if isinstance(ep.get("telemetry"), dict):
+                ep["telemetry"]["url"] = "[redacted]"
         models.append(
             {
                 "id": str(rm.id),
@@ -449,6 +487,7 @@ async def collect(
         "failures": failures,
         "quality_failures": quality_failures,
         "reproduction": reproduction(run),
+        "telemetry": await _telemetry(session, run),
     }
     data["warnings"] = _warnings(run, data)
     return data

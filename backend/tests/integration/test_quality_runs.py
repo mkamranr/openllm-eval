@@ -380,7 +380,7 @@ async def test_embedding_similarity_through_an_embedding_endpoint(
     ("body", "message"),
     [
         ({"suites": ["tool_calling"]}, "tool_call"),
-        ({"suites": ["quantization"]}, "Milestone 7"),
+        ({"suites": ["quantization"]}, "compared across runs"),
         ({"suites": ["answer_quality"], "evaluation": {"tool_mode": "integration"}}, "mode C"),
         (
             {"suites": ["answer_quality"], "evaluation": {"disabled_evaluators": ["nope"]}},

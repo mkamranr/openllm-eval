@@ -36,7 +36,9 @@ describe("EndpointForm", () => {
       base_url: "http://vllm:8000/v1",
       model_identifier: "qwen",
       secret_reference: "env:OPENLLM_SECRET_VLLM",
-      deployment_metadata: { gpu: "A100" },
+      deployment_metadata: { gpu_type: "A100" },
+      model_metadata: {},
+      telemetry: null,
       tags: ["gpu", "prod"],
       enabled: true,
     });
@@ -103,5 +105,25 @@ describe("EndpointForm", () => {
     await waitFor(() => expect(onSaved).toHaveBeenCalled());
     expect((calls[0]!.body as EndpointInput).request_configuration.verify_tls).toBe(false);
     expect((calls[0]!.body as EndpointInput).request_configuration.temperature).toBe(0.2);
+  });
+  it("saves declared variant fields and telemetry, keeping unknown fields out", async () => {
+    const endpoint = makeEndpoint({ model_metadata: { family: "llama", note: "kept" } });
+    const { calls } = stubFetch((method, path) =>
+      method === "PATCH" && path === "/endpoints/e1" ? jsonResponse(endpoint) : undefined,
+    );
+    const onSaved = vi.fn();
+    const user = userEvent.setup();
+    render(<EndpointForm endpoint={endpoint} projects={[]} adapters={ADAPTERS} onSaved={onSaved} onClose={() => {}} />);
+
+    expect(screen.getByLabelText("Model family")).toHaveValue("llama");
+    await user.type(screen.getByLabelText("Quantization method"), "AWQ");
+    await user.type(screen.getByLabelText("Weight bits"), "4");
+    await user.type(screen.getByLabelText("Exporter URL"), "http://gpu:9400/metrics");
+    await user.type(screen.getByLabelText("GPU indices"), "0, 1");
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(onSaved).toHaveBeenCalled());
+    const sent = calls[0]!.body as EndpointInput;
+    expect(sent.model_metadata).toEqual({ family: "llama", note: "kept", quantization_method: "AWQ", weight_bits: 4 });
+    expect(sent.telemetry).toMatchObject({ url: "http://gpu:9400/metrics", interval_seconds: 2, gpu_indices: [0, 1] });
   });
 });
