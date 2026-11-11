@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 
 Role = Literal["viewer", "editor", "admin"]
 LOCAL_USERNAME_PATTERN = r"^[a-z0-9][a-z0-9._-]{0,63}$"
@@ -42,6 +42,12 @@ class LdapSettings(BaseModel):
     verify_tls: bool = True
     # PEM CA bundle for the directory's certificate (internal CA). Empty = system CAs.
     ca_cert_pem: str | None = Field(default=None, max_length=65_536)
+    # "service": a service account (or anonymous) searches for the user, then the user's DN is
+    # bound with their password. "direct": no service account; the user binds with their own
+    # name built from user_bind_format (AD: "{username}@corp.example" or "CORP\\{username}"),
+    # and, if a search base is set, that connection reads the user's own entry for groups.
+    bind_mode: Literal["service", "direct"] = "service"
+    user_bind_format: str = Field(default="", max_length=300)
     # Service account used to search for users. Empty = anonymous search.
     bind_dn: str | None = Field(default=None, max_length=1000)
     user_search_base: str = Field(default="", max_length=1000)
@@ -102,6 +108,27 @@ class LdapSettings(BaseModel):
     @classmethod
     def _blank_none(cls, value: str | None) -> str | None:
         return value.strip() or None if value else None
+
+    @field_validator("user_bind_format")
+    @classmethod
+    def _bind_format(cls, value: str) -> str:
+        value = value.strip()
+        if value and value.count("{username}") != 1:
+            raise ValueError("the user bind format must contain {username} once")
+        return value
+
+    @model_validator(mode="after")
+    def _direct_mode(self) -> LdapSettings:
+        if self.bind_mode == "direct":
+            if not self.user_bind_format:
+                raise ValueError(
+                    "direct bind needs a user bind format, e.g. {username}@corp.example"
+                )
+            if self.allowed_groups and not self.user_search_base:
+                raise ValueError(
+                    "allowed groups need a user search base: without it, groups are not read"
+                )
+        return self
 
 
 class KerberosSettings(BaseModel):

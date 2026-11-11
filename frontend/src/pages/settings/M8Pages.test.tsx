@@ -174,7 +174,7 @@ describe("Settings", () => {
     const saved: AuthSettings = {
       ldap: {
         enabled: true, server_urls: ["ldaps://dc1.corp.example:636"], start_tls: false, verify_tls: true, ca_cert_pem: null,
-        bind_dn: "CN=svc,DC=corp", user_search_base: "OU=Users,DC=corp", user_filter: "(&(objectClass=user)(sAMAccountName={username}))",
+        bind_mode: "service", user_bind_format: "", bind_dn: "CN=svc,DC=corp", user_search_base: "OU=Users,DC=corp", user_filter: "(&(objectClass=user)(sAMAccountName={username}))",
         username_attribute: "sAMAccountName", display_name_attribute: "displayName", email_attribute: "mail", group_attribute: "memberOf",
         nested_groups: false, timeout_seconds: 5, role_mappings: [{ group: "LLM Admins", role: "admin" }], allowed_groups: [], default_role: "viewer",
         bind_password_set: true,
@@ -213,5 +213,14 @@ describe("Settings", () => {
     expect(put.ldap.bind_password).toBeNull();
     expect(put.ldap.role_mappings).toEqual([{ group: "LLM Admins", role: "admin" }, { group: "LLM Editors", role: "editor" }]);
     expect(put.ldap).not.toHaveProperty("bind_password_set");
+
+    // Switching to direct bind hides the service account and sends the bind format.
+    await user.click(screen.getByRole("radio", { name: /Bind as the user/ }));
+    expect(screen.queryByLabelText("Service account password")).not.toBeInTheDocument();
+    await user.type(screen.getByLabelText("User bind format"), "{{username}@corp.example");
+    await user.click(screen.getByRole("button", { name: /Save authentication settings/ }));
+    await waitFor(() => expect(calls.filter((c) => c.method === "PUT")).toHaveLength(2));
+    const direct = calls.filter((c) => c.method === "PUT")[1]!.body as { ldap: Record<string, unknown> };
+    expect(direct.ldap).toMatchObject({ bind_mode: "direct", user_bind_format: "{username}@corp.example" });
   });
 });

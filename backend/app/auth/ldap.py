@@ -23,6 +23,8 @@ from app.schemas.auth import LdapSettings
 
 MAX_NESTED_DEPTH = 8
 MAX_GROUPS = 1000
+# Characters that would change the meaning of a name inside a UPN, DOMAIN\name or DN template.
+_DIRECT_FORBIDDEN = frozenset(',+"\\<>;=#*()/ ')
 
 
 class DirectoryError(Exception):
@@ -161,9 +163,11 @@ class LdapDirectory:
         if host in self.blocked_hosts:
             raise DirectoryError(f"The directory host {host!r} is blocked by the network policy.")
 
-    def _bind(self, user: str | None, password: str | None) -> ldap3.Connection | None:
+    def _bind(
+        self, user: str | None, password: str | None, *, bind: bool = True
+    ) -> ldap3.Connection | None:
         """A bound connection, None if the credentials were rejected; DirectoryError if no
-        server could be used."""
+        server could be used. With bind=False: an open (and StartTLS-secured) connection."""
         if not self.cfg.server_urls:
             raise DirectoryError("No directory server is configured.")
         last_error = "no server reachable"
@@ -178,6 +182,8 @@ class LdapDirectory:
                 if self.cfg.start_tls and not url.lower().startswith("ldaps://"):
                     if not conn.start_tls():
                         raise DirectoryError(f"{url}: StartTLS failed")
+                if not bind:
+                    return conn
                 if conn.bind():
                     return conn
                 result = conn.result or {}
@@ -194,6 +200,16 @@ class LdapDirectory:
         raise DirectoryError(f"The directory could not be reached ({last_error}).")
 
     def _service(self) -> ldap3.Connection:
+        if self.cfg.bind_mode == "direct":
+            raise DirectoryError(
+                "Direct bind has no service account, so users cannot be looked up without "
+                "their password (Kerberos single sign-on needs a service account)."
+            )
+        if self.cfg.bind_dn and not self.bind_password:
+            raise DirectoryError(
+                "A service account (bind DN) is set but no password is stored. Enter its "
+                "password, or choose 'Bind as the user' to sign in without a service account."
+            )
         conn = self._bind(self.cfg.bind_dn, self.bind_password if self.cfg.bind_dn else None)
         if conn is None:
             raise DirectoryError(
@@ -273,6 +289,8 @@ class LdapDirectory:
         # An empty password would be an unauthenticated bind, which many servers accept.
         if not password or not username:
             raise InvalidCredentialsError
+        if self.cfg.bind_mode == "direct":
+            return self._authenticate_direct(username, password)
         service = self._service()
         try:
             user = self._search_user(service, username)
@@ -284,6 +302,30 @@ class LdapDirectory:
         conn.unbind()
         return user
 
+    def _authenticate_direct(self, username: str, password: str) -> DirectoryUser:
+        """Bind as the user ("{username}@corp.example"), then read their own entry for groups
+        when a search base is set. No service account."""
+        # The name goes into a UPN, DOMAIN\name or DN template: refuse anything that could
+        # change its meaning there instead of trying to escape it for every format.
+        if any(c in _DIRECT_FORBIDDEN or ord(c) < 32 for c in username):
+            raise InvalidCredentialsError
+        bind_name = self.cfg.user_bind_format.replace("{username}", username)
+        conn = self._bind(bind_name, password)
+        if conn is None:
+            raise InvalidCredentialsError
+        try:
+            if not self.cfg.user_search_base:
+                return DirectoryUser(dn=bind_name, username=username, display_name=None, email=None)
+            try:
+                return self._search_user(conn, username)
+            except InvalidCredentialsError:
+                raise DirectoryError(
+                    "The password was accepted, but the user's own entry was not found under "
+                    "the search base with the user filter; check both."
+                ) from None
+        finally:
+            conn.unbind()
+
     def lookup(self, username: str) -> DirectoryUser:
         """Find a user without their password (Kerberos sign-in: the ticket proved identity)."""
         service = self._service()
@@ -293,6 +335,15 @@ class LdapDirectory:
             service.unbind()
 
     def test_connection(self) -> dict[str, Any]:
+        if self.cfg.bind_mode == "direct":
+            conn = self._bind(None, None, bind=False)
+            if conn is not None:
+                conn.unbind()
+            return {
+                "bind": "direct (as the user)",
+                "detail": "Server reachable. Use Test user with a username and password to "
+                "check the bind format and groups.",
+            }
         service = self._service()
         try:
             found = service.search(

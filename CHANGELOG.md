@@ -28,6 +28,13 @@ All notable changes to this project are documented here. The format follows
   created by an earlier install whose `.env` had a different `ADMIN_INITIAL_PASSWORD`. It now
   checks the password first (new admin command `check-password`, password on stdin) and, if it
   does not match, prints the `reset-password` command instead.
+- **Direct bind for Active Directory / LDAP** (Settings → Authentication → *Bind as the user*).
+  No service account is needed: users bind with their own name, built from a user bind format
+  such as `{username}@corp.example`. With a user search base, their own entry is read for
+  groups and role mappings; without one, everyone gets the default role. Service account mode
+  stays the default and is still needed for Windows single sign-on.
+- A bind DN with no stored password now gives a clear message instead of ldap3's
+  "password is mandatory in simple bind".
 - Active Directory / LDAP connections always failed on Linux with `LDAPSocketOpenError`
   ("required argument is not an integer"). ldap3 packs the receive timeout as an integer, and
   it was given a float (`5.0`). The timeout is now passed in whole seconds, rounded up.

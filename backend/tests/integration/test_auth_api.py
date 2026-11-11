@@ -416,6 +416,33 @@ async def test_ldap_login_maps_groups_to_roles(directory, api):
         assert (await sign_in(c, "carol", fx.PASSWORDS["carol"])).json()["role"] == "viewer"
 
 
+async def test_ldap_direct_bind_login_without_service_account(directory, api):
+    saved = await api.put(
+        "/api/v1/settings/auth",
+        json={
+            "ldap": fx.ldap_settings(
+                bind_mode="direct", user_bind_format=fx.DIRECT_FORMAT, bind_dn=None
+            )
+        },
+    )
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["ldap"]["bind_password_set"] is False
+    conn = (await api.post("/api/v1/settings/auth/test-connection")).json()
+    assert conn["ok"] is True and conn["details"]["bind"].startswith("direct")
+    tested = (
+        await api.post(
+            "/api/v1/settings/auth/test-user",
+            json={"username": "erin", "password": fx.PASSWORDS["erin"]},
+        )
+    ).json()
+    assert tested["ok"] is True and tested["details"]["role"] == "editor"
+    async with fresh(api) as c:
+        erin = await sign_in(c, "CORP\\erin", fx.PASSWORDS["erin"])
+        assert erin.status_code == 200, erin.text
+        assert erin.json()["role"] == "editor" and erin.json()["user"]["source"] == "ldap"
+        assert (await sign_in(c, "erin", "wrong")).status_code == 401
+
+
 async def test_local_account_wins_over_directory(directory, api):
     await _save_ldap(api)
     await create_test_user(api._transport.app, "alice", "viewer", password="Local-Alice-Pass-1")

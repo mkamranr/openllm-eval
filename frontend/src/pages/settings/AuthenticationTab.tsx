@@ -142,6 +142,32 @@ export function AuthenticationTab() {
           </label>
           <small className="hint" id="ldap-ca-hint">Your internal CA, if the domain controllers' certificates are not publicly trusted.</small>
         </div>
+        <fieldset className="field" style={{ border: 0, padding: 0, margin: 0 }}>
+          <legend className="label">How users are checked</legend>
+          <label className="small" style={{ display: "flex", gap: 6 }}>
+            <input type="radio" name="bind-mode" checked={ldap.bind_mode === "direct"} onChange={() => set("bind_mode", "direct")} />
+            Bind as the user: each user signs in with their own username and password. No service account needed.
+          </label>
+          <label className="small" style={{ display: "flex", gap: 6 }}>
+            <input type="radio" name="bind-mode" checked={ldap.bind_mode === "service"} onChange={() => set("bind_mode", "service")} />
+            Service account: search for the user first. Needed for Windows single sign-on.
+          </label>
+        </fieldset>
+        {ldap.bind_mode === "direct" && (
+          <div className="field">
+            <label className="field">
+              <span className="label">User bind format</span>
+              <input className="input mono" value={ldap.user_bind_format} aria-describedby="ldap-bind-format-hint"
+                onChange={(e) => set("user_bind_format", e.target.value)} placeholder="{username}@corp.example.com" />
+            </label>
+            <small className="hint" id="ldap-bind-format-hint">
+              {"{username}"} is replaced by the name the user typed (without any domain part). For Active Directory use{" "}
+              {"{username}@your.domain"} or {"DOMAIN\\{username}"}. With a user search base, the user's own entry is read
+              for groups. Without one, everyone gets the default role below.
+            </small>
+          </div>
+        )}
+        {ldap.bind_mode === "service" && (
         <div className="form-row">
           <label className="field">
             <span className="label">Service account (bind DN)</span>
@@ -164,9 +190,10 @@ export function AuthenticationTab() {
             )}
           </div>
         </div>
+        )}
         <div className="form-row">
           <label className="field">
-            <span className="label">User search base</span>
+            <span className="label">User search base{ldap.bind_mode === "direct" ? " (optional)" : ""}</span>
             <input className="input mono" value={ldap.user_search_base} onChange={(e) => set("user_search_base", e.target.value)}
               placeholder="OU=Users,DC=corp,DC=example,DC=com" />
           </label>
@@ -243,7 +270,7 @@ export function AuthenticationTab() {
         <div className="toolbar" style={{ padding: 0 }}>
           <input className="input" aria-label="Test username" placeholder="Username to test" value={testUser.username}
             onChange={(e) => setTestUser({ ...testUser, username: e.target.value })} style={{ maxWidth: 220 }} />
-          <input className="input" type="password" aria-label="Test password" placeholder="Password (optional)" autoComplete="off"
+          <input className="input" type="password" aria-label="Test password" placeholder={ldap.bind_mode === "direct" ? "Password" : "Password (optional)"} autoComplete="off"
             value={testUser.password} onChange={(e) => setTestUser({ ...testUser, password: e.target.value })} style={{ maxWidth: 220 }} />
           <button type="button" className="btn" disabled={busy || !testUser.username.trim()}
             onClick={() => run(async () => setTest(await api.authSettings.testUser(payload(), testUser.username, testUser.password || null)))}>

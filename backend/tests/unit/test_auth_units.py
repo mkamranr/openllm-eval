@@ -222,6 +222,58 @@ def test_ldap_blocked_host(mock_server):
         directory.test_connection()
 
 
+def _direct(server, **kw) -> LdapDirectory:
+    cfg = {"bind_mode": "direct", "user_bind_format": fx.DIRECT_FORMAT, "bind_dn": None, **kw}
+    return LdapDirectory(_cfg(**cfg), None, connection_factory=fx.connection_factory(server))
+
+
+def test_ldap_direct_bind_reads_own_groups(mock_server):
+    user = _direct(mock_server).authenticate("erin", fx.PASSWORDS["erin"])
+    assert user.username == "erin" and user.display_name == "Erin Editor"
+    assert fx.EDITORS in user.groups
+    assert map_role(user.groups, _cfg()) == "editor"
+
+
+def test_ldap_direct_bind_without_search_base(mock_server):
+    user = _direct(mock_server, user_search_base="").authenticate("erin", fx.PASSWORDS["erin"])
+    assert user.dn == f"CN=erin,{fx.USERS}" and user.groups == []
+
+
+def test_ldap_direct_bind_rejects(mock_server):
+    directory = _direct(mock_server)
+    for name, pw in [
+        ("erin", "wrong"),
+        ("erin", ""),
+        ("nobody", "x"),
+        ("erin,OU=X", "x"),
+        ("*", "x"),
+    ]:
+        with pytest.raises(InvalidCredentialsError):
+            directory.authenticate(name, pw)
+    with pytest.raises(DirectoryError, match="without their password"):
+        directory.lookup("erin")
+    assert directory.test_connection()["bind"].startswith("direct")
+
+
+def test_ldap_direct_settings_validation():
+    with pytest.raises(ValueError, match="user bind format"):
+        _cfg(bind_mode="direct", user_bind_format="")
+    with pytest.raises(ValueError, match="once"):
+        _cfg(bind_mode="direct", user_bind_format="corp\\user")
+    with pytest.raises(ValueError, match="search base"):
+        _cfg(
+            bind_mode="direct",
+            user_bind_format="{username}@corp",
+            user_search_base="",
+            allowed_groups=["Staff"],
+        )
+
+
+def test_ldap_service_dn_without_password_is_explained(mock_server):
+    with pytest.raises(DirectoryError, match="no password is stored"):
+        _directory(mock_server, password=None).test_connection()
+
+
 def test_ldap_receive_timeout_is_whole_seconds():
     # ldap3 on Linux packs SO_RCVTIMEO with struct.pack("LL", ...), which rejects floats.
     import struct

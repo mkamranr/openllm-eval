@@ -60,6 +60,8 @@ export interface LdapSettings {
   start_tls: boolean;
   verify_tls: boolean;
   ca_cert_pem: string | null;
+  bind_mode: "service" | "direct";
+  user_bind_format: string;
   bind_dn: string | null;
   user_search_base: string;
   user_filter: string;

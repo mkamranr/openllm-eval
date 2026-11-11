@@ -71,6 +71,24 @@ Runs record who started them; this is shown as "Started by" on the run page.
 
 ## Active Directory / LDAP (Settings → Authentication, admin)
 
+There are two ways to check a directory user. Choose one under **How users are checked**:
+
+- **Bind as the user** needs no service account. The app binds with the name and password the
+  user typed. The name comes from the **user bind format**, for example `{username}@corp.example`
+  (the UPN) or `CORP\{username}`. `{username}` is the typed name without any domain part, so
+  `CORP\alice`, `alice@corp.example` and `alice` all bind as `alice@corp.example`.
+  - If a **user search base** is set, that same connection reads the user's own entry (with the
+    user filter), giving the display name, email and groups for the role mappings. Ordinary AD
+    users may read their own entry.
+  - Without a search base, no groups are read. Every directory user gets the **default role**,
+    and an administrator can change it per user under Users. Allowed groups need a search base.
+  - **Test connection** only checks that a server answers. Use **Test user** with a password to
+    check the bind format and groups.
+  - Windows single sign-on (Kerberos) and Test user without a password need the service account
+    mode, because a user cannot be looked up without their password.
+- **Service account** searches for the user first, then binds as the user's DN with their
+  password. Set it up as follows.
+
 1. **Create a service account** in AD with read access to users and groups, for example
    `CN=svc-openllm,OU=Service Accounts,DC=corp,DC=example`. Ordinary domain users can read the
    directory, so no extra rights are usually needed.

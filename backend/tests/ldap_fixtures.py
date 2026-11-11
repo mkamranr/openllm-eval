@@ -21,7 +21,9 @@ PASSWORDS = {
     "bob": "Bob-Pass-2026!",
     "carol": "Carol-Pass-2026!",
     "dave": "Dave-Pass-2026!",
+    "erin": "Erin-Pass-2026!",
 }
+DIRECT_FORMAT = f"CN={{username}},{USERS}"
 
 
 def build_server() -> ldap3.Server:
@@ -64,6 +66,18 @@ def build_server() -> ldap3.Server:
                 "userPassword": PASSWORDS[name],
             },
         )
+    # Direct-bind tests: the offline mock binds by DN only, so this user's DN is built from
+    # the username (format "CN={username},OU=Users,...").
+    add(
+        f"CN=erin,{USERS}",
+        {
+            "objectClass": ["top", "person", "user"],
+            "sAMAccountName": "erin",
+            "displayName": "Erin Editor",
+            "memberOf": [EDITORS],
+            "userPassword": PASSWORDS["erin"],
+        },
+    )
     return server
 
 
