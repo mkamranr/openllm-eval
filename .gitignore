@@ -39,3 +39,4 @@ Thumbs.db
 /OpenLLM-Eval-Implementation-Plan.md
 /OpenLLM-Eval*Dashboard*.png
 /*.tar.gz
+/docker-compose.override.yml

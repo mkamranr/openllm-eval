@@ -28,6 +28,12 @@ All notable changes to this project are documented here. The format follows
   created by an earlier install whose `.env` had a different `ADMIN_INITIAL_PASSWORD`. It now
   checks the password first (new admin command `check-password`, password on stdin) and, if it
   does not match, prints the `reset-password` command instead.
+- Active Directory / LDAP connections always failed on Linux with `LDAPSocketOpenError`
+  ("required argument is not an integer"). ldap3 packs the receive timeout as an integer, and
+  it was given a float (`5.0`). The timeout is now passed in whole seconds, rounded up.
+- "The directory could not be reached" now includes the network reason (for example `Name or
+  service not known` or `timed out`). The authentication guide explains how to fix DNS and firewall
+  problems for the `api` container with a `docker-compose.override.yml`.
 
 ### Added — Milestone 9 (sandboxed tool execution, spec §5.7 mode C)
 - **Integration mode** (`tool_mode: "integration"`, **Execute in sandbox** in the wizard). Tool

@@ -222,6 +222,41 @@ def test_ldap_blocked_host(mock_server):
         directory.test_connection()
 
 
+def test_ldap_receive_timeout_is_whole_seconds():
+    # ldap3 on Linux packs SO_RCVTIMEO with struct.pack("LL", ...), which rejects floats.
+    import struct
+
+    from app.auth.ldap import default_connection
+
+    conn = default_connection("ldap://dc1.corp.example", _cfg(timeout_seconds=2.5), None, None)
+    assert conn.receive_timeout == 3 and isinstance(conn.receive_timeout, int)
+    struct.pack("LL", conn.receive_timeout, 0)
+
+
+def test_ldap_unreachable_reports_socket_reason():
+    from ldap3.core.exceptions import LDAPSocketOpenError
+
+    class Unreachable:
+        closed = True
+
+        def open(self):
+            raise LDAPSocketOpenError(
+                "socket connection error while opening: [Errno -2] Name or service not known"
+            )
+
+    directory = LdapDirectory(
+        _cfg(server_urls=["ldap://dc1.corp.example", "ldap://dc2.corp.example"]),
+        fx.SERVICE_PASSWORD,
+        connection_factory=lambda *_: Unreachable(),
+    )
+    with pytest.raises(DirectoryError) as info:
+        directory.test_connection()
+    message = str(info.value)
+    assert "dc2.corp.example: LDAPSocketOpenError" in message
+    assert "Name or service not known" in message
+    assert fx.SERVICE_PASSWORD not in message
+
+
 # ----------------------------------------------------------------------- CSRF origin check
 @pytest.mark.parametrize(
     ("origin", "headers", "allowed"),

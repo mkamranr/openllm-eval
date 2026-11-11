@@ -6,6 +6,7 @@ Passwords are never logged or included in error messages.
 
 from __future__ import annotations
 
+import math
 import ssl
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -106,11 +107,21 @@ def default_connection(
         user=user,
         password=password,
         auto_bind=ldap3.AUTO_BIND_NONE,
-        receive_timeout=cfg.timeout_seconds,
+        # Whole seconds: on Linux ldap3 sets SO_RCVTIMEO with struct.pack("LL", timeout, 0),
+        # which rejects a float ("required argument is not an integer") and fails every connect.
+        receive_timeout=math.ceil(cfg.timeout_seconds),
         raise_exceptions=False,
         read_only=True,
         auto_referrals=False,
     )
+
+
+def _reason(exc: Exception) -> str:
+    """The exception type plus ldap3's socket/TLS detail (e.g. "Name or service not known" vs
+    "timed out" vs "Connection refused"), which tells a DNS problem from a firewall. These
+    messages carry addresses, never credentials."""
+    detail = " ".join(str(exc).split())[:300]
+    return f"{type(exc).__name__}: {detail}" if detail else type(exc).__name__
 
 
 def _values(attributes: dict[str, Any], name: str) -> list[str]:
@@ -178,10 +189,8 @@ class LdapDirectory:
                 conn.unbind()
             except DirectoryError:
                 raise
-            except LDAPException as exc:
-                last_error = f"{url}: {type(exc).__name__}"
-            except OSError as exc:
-                last_error = f"{url}: {type(exc).__name__}"
+            except (LDAPException, OSError) as exc:
+                last_error = f"{url}: {_reason(exc)}"
         raise DirectoryError(f"The directory could not be reached ({last_error}).")
 
     def _service(self) -> ldap3.Connection:

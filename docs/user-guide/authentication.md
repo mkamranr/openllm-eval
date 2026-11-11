@@ -111,6 +111,46 @@ The directory servers must not be this deployment's own services (`ENDPOINT_BLOC
 by default `postgres` and `redis`). Unlike model endpoints, they are allowed on private
 networks, because domain controllers always are.
 
+### "The directory could not be reached"
+
+The connection is made from inside the `api` container, not from the server itself. A directory
+that works for a program running directly on the server can still be unreachable from a
+container, usually because of name resolution. The server may resolve the domain through
+`/etc/hosts` or a local resolver (`127.0.0.53`, systemd-resolved) that containers don't use.
+The text after the server URL says which problem it is:
+
+| Message contains | Meaning |
+|---|---|
+| `Name or service not known`, `Temporary failure in name resolution`, `invalid server address` | DNS: the container can't resolve the host name |
+| `timed out` | Routing or a firewall drops traffic from the Docker network |
+| `Connection refused` | The host answered, but nothing listens on that port (389 for LDAP, 636 for LDAPS) |
+
+Check from inside the container:
+
+```bash
+docker compose -p openllm-eval exec api cat /etc/resolv.conf
+docker compose -p openllm-eval exec api python -c "import socket; print(socket.getaddrinfo('dc1.corp.example', 389))"
+docker compose -p openllm-eval exec api python -c "import socket; socket.create_connection(('dc1.corp.example', 389), 5); print('ok')"
+```
+
+Fix name resolution with a `docker-compose.override.yml` next to `docker-compose.yml`. Compose
+reads it automatically. Copy it to each new release folder, like `.env`.
+
+```yaml
+services:
+  api:
+    dns: [10.0.0.10, 10.0.0.11]          # your domain's DNS servers
+    dns_search: [corp.example]
+    # or pin the names, as /etc/hosts on the server does:
+    extra_hosts:
+      - "dc1.corp.example:10.0.0.21"
+```
+
+Then run `bash scripts/deploy.sh` again. Using the IP address in the server URL also works for
+`ldap://`. For `ldaps://` the certificate must then be valid for that IP, so prefer the name.
+A `timed out` from the container usually means a host firewall rule allows only the server's own
+traffic. Allow the Docker networks (often `172.16.0.0/12`) to reach the domain controllers.
+
 ## Windows single sign-on (Kerberos, optional)
 
 With single sign-on, users on domain-joined Windows machines click **Sign in with Windows** and
