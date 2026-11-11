@@ -180,3 +180,17 @@ def test_admin_cli_password_from_stdin_checks_policy(admin_cli):
         input="Blue-Kettle-Morning-7\n",
     )
     assert ok.exit_code == 0 and "password:" not in ok.stdout
+
+
+def test_admin_cli_check_password(admin_cli):
+    app = admin_cli.app
+    pw = "Blue-Kettle-Morning-7"
+    assert (
+        runner.invoke(app, ["create-user", "chk", "--password-stdin"], input=pw + "\n").exit_code
+        == 0
+    )
+    good = runner.invoke(app, ["check-password", "chk"], input=pw + "\n")
+    assert good.exit_code == 0 and pw not in good.stdout + good.stderr
+    bad = runner.invoke(app, ["check-password", "chk"], input="Wrong-Kettle-Morning-7\n")
+    assert bad.exit_code == 1 and "does not match" in bad.stderr
+    assert runner.invoke(app, ["check-password", "nobody"], input=pw + "\n").exit_code == 1

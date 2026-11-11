@@ -220,3 +220,33 @@ def test_ldap_blocked_host(mock_server):
     )
     with pytest.raises(DirectoryError, match="blocked"):
         directory.test_connection()
+
+
+# ----------------------------------------------------------------------- CSRF origin check
+@pytest.mark.parametrize(
+    ("origin", "headers", "allowed"),
+    [
+        (None, {"host": "srv"}, True),
+        ("http://srv:3000", {"host": "srv:3000"}, True),
+        # nginx "Host $host" drops the port: still the same site.
+        ("http://srv:3000", {"host": "srv"}, True),
+        ("http://srv:3000", {"host": "api:8000", "x-forwarded-host": "srv:3000"}, True),
+        ("https://llm.corp.example", {"host": "llm.corp.example"}, True),
+        ("http://[::1]:3000", {"host": "[::1]:3000"}, True),
+        ("http://srv:4000", {"host": "srv:3000"}, False),
+        ("https://evil.example", {"host": "srv"}, False),
+        ("http://srv.evil.example", {"host": "srv"}, False),
+        ("null", {"host": "srv"}, False),
+    ],
+)
+def test_origin_check(origin, headers, allowed):
+    from starlette.requests import Request
+
+    from app.auth.dependencies import _origin_allowed
+    from app.core.config import Settings
+
+    raw = [(k.encode(), v.encode()) for k, v in headers.items()]
+    if origin is not None:
+        raw.append((b"origin", origin.encode()))
+    request = Request({"type": "http", "method": "POST", "path": "/", "headers": raw})
+    assert _origin_allowed(request, Settings()) is allowed

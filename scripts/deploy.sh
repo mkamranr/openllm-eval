@@ -74,6 +74,16 @@ if ((c_major < 2 || (c_major == 2 && ${c_minor%%[!0-9]*} < 24))); then
 fi
 [[ -f .env ]] || die ".env not found. Copy it from your previous install, or: cp .env.example .env (then set POSTGRES_PASSWORD)"
 
+# --- Windows line endings ------------------------------------------------------------------------
+# Files copied or edited on Windows can end lines with CR LF. Bash then fails with
+# "set: pipefail: invalid option name", and .env values gain an invisible trailing CR.
+for f in scripts/*.sh .env tools/tools.yaml tools/scripts/*.py; do
+  if [[ -f "$f" ]] && [[ "$(tr -dc '\r' <"$f" | wc -c)" -gt 0 ]]; then
+    tr -d '\r' <"$f" >"$f.lf" && cat "$f.lf" >"$f" && rm -f "$f.lf"  # cat keeps the file mode
+    warn "Converted Windows line endings (CRLF) to LF in $f"
+  fi
+done
+
 # --- Authentication secrets (Milestone 8) -----------------------------------------------------
 # Generated once and kept in .env, so upgrades reuse them. Letters and digits only, so they need
 # no quoting in .env.
@@ -233,6 +243,9 @@ done
 # --- Build and start ---------------------------------------------------------------------------
 info "Building and starting '$PROJECT' (migrations run automatically)"
 "${COMPOSE[@]}" ${profiles[@]+"${profiles[@]}"} up -d --build --remove-orphans
+# A frontend left running (unchanged image) may still hold the address of the api container that
+# was just replaced (frontend images before M9.2 resolve it only at startup), so restart it.
+"${COMPOSE[@]}" restart frontend >/dev/null
 
 if ((smoke)); then
   COMPOSE="${COMPOSE[*]}" bash scripts/smoke-test.sh
@@ -244,12 +257,20 @@ if [[ "$(env_value AUTH_ENABLED | tr '[:upper:]' '[:lower:]')" == "false" ]]; th
 else
   admin_name="$(env_value ADMIN_USERNAME)"
   admin_name="${admin_name:-admin}"
-  # The bootstrap administrator still has its initial password until someone signs in and
-  # changes it; only then is the password printed.
+  # While the administrator must still change its password, show the initial one, but only if it
+  # really is the current password: the account may have been created by an earlier install
+  # whose .env had a different ADMIN_INITIAL_PASSWORD (the database outlives the folder).
   if "${COMPOSE[@]}" exec -T api python -m app.cli.admin list-users 2>/dev/null \
     | grep -E "^$admin_name +admin .*must-change-password" >/dev/null; then
-    info "Sign in at http://<this host>:${frontend_port:-3000} as '$admin_name' with password: $(env_value ADMIN_INITIAL_PASSWORD)"
-    info "You must choose a new password at the first sign-in. (The password is ADMIN_INITIAL_PASSWORD in .env.)"
+    if env_value ADMIN_INITIAL_PASSWORD \
+      | "${COMPOSE[@]}" exec -T api python -m app.cli.admin check-password "$admin_name" >/dev/null 2>&1; then
+      info "Sign in at http://<this host>:${frontend_port:-3000} as '$admin_name' with password: $(env_value ADMIN_INITIAL_PASSWORD)"
+      info "You must choose a new password at the first sign-in. (The password is ADMIN_INITIAL_PASSWORD in .env.)"
+    else
+      warn "'$admin_name' must still change its password, but it is not ADMIN_INITIAL_PASSWORD from this .env"
+      warn "(the account was created by an earlier install). Set a new one-time password with:"
+      echo "    ${COMPOSE[*]} exec api python -m app.cli.admin reset-password $admin_name"
+    fi
   fi
 fi
 

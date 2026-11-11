@@ -6,6 +6,29 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed — after Milestone 9
+- Browser sign-in was refused with "Cross-site request rejected". nginx forwarded `Host` without
+  the port (`$host`), so the API's same-origin check did not match the browser's `Origin`
+  (e.g. `http://server:3000`). nginx now forwards `$http_host` and `X-Forwarded-Host`, and the
+  check also accepts a forwarded host whose port a proxy dropped. The smoke test now signs in
+  with a browser-style `Origin`, and checks that a foreign one is refused.
+- Smoke test:
+  - waits until the UI proxy forwards `/api` before the cookie sign-in checks (the frontend may
+    still be starting after a rebuild);
+  - status-code checks print the code they got;
+  - the temporary viewer is removed even when a check fails;
+  - the tool-registry check no longer assumes a key order (PostgreSQL jsonb reorders keys).
+- `deploy.sh` converts Windows (CRLF) line endings in `scripts/*.sh`, `.env` and `tools/` to
+  LF. Copies edited or transferred on Windows failed with "set: pipefail: invalid option name".
+- The UI's `/api` proxy stopped working after a redeploy that replaced the api container but not
+  the frontend: nginx resolved `api` only at startup and kept the old address. nginx now resolves
+  it per request through Docker's DNS, and `deploy.sh` restarts the frontend after starting the
+  stack. The smoke test prints the last HTTP code and a hint if the proxy check times out.
+- `deploy.sh` could print an administrator password that did not work: the account had been
+  created by an earlier install whose `.env` had a different `ADMIN_INITIAL_PASSWORD`. It now
+  checks the password first (new admin command `check-password`, password on stdin) and, if it
+  does not match, prints the `reset-password` command instead.
+
 ### Added — Milestone 9 (sandboxed tool execution, spec §5.7 mode C)
 - **Integration mode** (`tool_mode: "integration"`, **Execute in sandbox** in the wizard). Tool
   calls are executed by administrator-declared tools, and the model continues with the real

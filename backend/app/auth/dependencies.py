@@ -95,8 +95,26 @@ def _origin_allowed(request: Request, settings: Settings) -> bool:
     }
     if origin.rstrip("/").lower() in allowed:
         return True
-    host = request.headers.get("x-forwarded-host") or request.headers.get("host") or ""
-    return urlsplit(origin).netloc.lower() == host.split(",")[0].strip().lower()
+    try:
+        parts = urlsplit(origin)
+        origin_host, origin_port = (parts.hostname or "").lower(), parts.port
+    except ValueError:
+        return False
+    for header in ("x-forwarded-host", "host"):
+        value = (request.headers.get(header) or "").split(",")[0].strip().lower()
+        if not value:
+            continue
+        if value == parts.netloc.lower():
+            return True
+        host, _, port = value.rpartition(":") if not value.endswith("]") else (value, "", "")
+        if not host or not port.isdigit():
+            host, port = value, ""
+        # A proxy that forwards "Host: name" without the port (nginx $host) still means the
+        # same site; the custom CSRF header is what cross-site pages cannot send.
+        host = host.strip("[]")
+        if host == origin_host and (not port or origin_port is None or int(port) == origin_port):
+            return True
+    return False
 
 
 def check_csrf(request: Request, settings: Settings) -> None:

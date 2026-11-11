@@ -163,6 +163,24 @@ def create_user(
     _run(go)
 
 
+@app.command("check-password")
+def check_password(username: str) -> None:
+    """Exit 0 if the password on standard input is the user's current password, else 1.
+    Prints nothing about the password; used by deploy.sh before it shows ADMIN_INITIAL_PASSWORD."""
+    from app.auth import passwords
+
+    supplied = _read_password(True) or ""
+
+    async def go(session: AsyncSession) -> bool:
+        user = await _user(session, username)
+        return passwords.verify_password(user.password_hash, supplied)
+
+    if not _run(go):
+        typer.echo("password does not match", err=True)
+        raise typer.Exit(code=1)
+    typer.echo("password matches")
+
+
 @app.command("reset-password")
 def reset_password(
     username: str,

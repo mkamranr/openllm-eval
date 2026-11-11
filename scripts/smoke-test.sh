@@ -28,9 +28,13 @@ pass() { printf '  \033[32mPASS\033[0m %s\n' "$1"; }
 fail() { printf '  \033[31mFAIL\033[0m %s\n' "$1"; exit 1; }
 
 wait_for() {
-  local description="$1" check="$2" deadline=$((SECONDS + TIMEOUT_SECONDS))
+  # wait_for DESCRIPTION CHECK [ON_TIMEOUT]: ON_TIMEOUT is run (e.g. to print a hint) before failing.
+  local description="$1" check="$2" on_timeout="${3:-}" deadline=$((SECONDS + TIMEOUT_SECONDS))
   until eval "$check" >/dev/null 2>&1; do
-    if (( SECONDS >= deadline )); then fail "$description (timed out after ${TIMEOUT_SECONDS}s)"; fi
+    if (( SECONDS >= deadline )); then
+      if [[ -n "$on_timeout" ]]; then eval "$on_timeout"; fi
+      fail "$description (timed out after ${TIMEOUT_SECONDS}s)"
+    fi
     sleep 2
   done
   pass "$description"
@@ -61,10 +65,14 @@ echo "    readiness: $ready"
 # temporary service account created inside the API container (removed again on exit).
 code_of() { command curl -s -o /dev/null -w '%{http_code}' "$@"; }
 SMOKE_SERVICE_USER=""
+SMOKE_VIEWER=""
 cleanup_auth() {
-  if [[ -n "$SMOKE_SERVICE_USER" ]]; then
-    $COMPOSE exec -T api python -m app.cli.admin delete-user "$SMOKE_SERVICE_USER" >/dev/null 2>&1 || true
-  fi
+  local u
+  for u in "$SMOKE_VIEWER" "$SMOKE_SERVICE_USER"; do
+    if [[ -n "$u" ]]; then
+      $COMPOSE exec -T api python -m app.cli.admin delete-user "$u" >/dev/null 2>&1 || true
+    fi
+  done
 }
 trap cleanup_auth EXIT
 if printf '%s' "$ready" | grep -q '"auth_enabled":false'; then
@@ -97,24 +105,36 @@ else
     -d "{\"username\":\"$viewer\",\"role\":\"viewer\",\"password\":\"$viewer_pw\",\"must_change_password\":false}")"
   viewer_id="$(printf '%s' "$created" | sed -n 's/^{"id":"\([0-9a-f-]*\)".*/\1/p')"
   [[ -n "$viewer_id" ]] && pass "created temporary viewer $viewer" || { echo "    $created"; fail "create a local user"; }
+  SMOKE_VIEWER="$viewer"  # removed by cleanup_auth if a check below fails
   jar="$(mktemp)"
   login_body="{\"username\":\"$viewer\",\"password\":\"$viewer_pw\"}"
-  [[ "$(code_of -c "$jar" -X POST "$FRONTEND_URL/api/v1/auth/login" -H 'Content-Type: application/json' -d "$login_body")" == "403" ]] \
-    && pass "sign-in without the CSRF header refused" || fail "sign-in accepted without the CSRF header"
-  [[ "$(code_of -c "$jar" -X POST "$FRONTEND_URL/api/v1/auth/login" -H 'Content-Type: application/json' \
-      -H 'X-OpenLLM-CSRF: 1' -d "$login_body")" == "200" ]] \
-    && pass "password sign-in through the UI proxy" || fail "password sign-in"
+  # The cookie checks go through the UI's nginx proxy, which may still be starting (deploy.sh
+  # rebuilds the frontend image when it changes).
+  wait_for "UI proxy forwards /api ($FRONTEND_URL/api/v1/health)" \
+    "command curl -fsS '$FRONTEND_URL/api/v1/health' | grep -q '\"status\":\"ok\"'" \
+    "echo \"    last HTTP code: \$(code_of '$FRONTEND_URL/api/v1/health')\"; echo \"    hint: an older frontend may hold the API's previous address; try: $COMPOSE restart frontend\""
+  # expect CODE DESCRIPTION CURL-ARGS...: pass if the request returns CODE, else show what it got.
+  expect() {
+    local want="$1" description="$2" got
+    shift 2
+    got="$(code_of "$@")"
+    [[ "$got" == "$want" ]] && pass "$description" || fail "$description: expected HTTP $want, got $got"
+  }
+  login_req=(-X POST "$FRONTEND_URL/api/v1/auth/login" -H 'Content-Type: application/json' -d "$login_body")
+  expect 403 "sign-in without the CSRF header refused" -c "$jar" "${login_req[@]}"
+  expect 200 "password sign-in through the UI proxy, with the browser's Origin header" \
+    -c "$jar" -H 'X-OpenLLM-CSRF: 1' -H "Origin: ${FRONTEND_URL%/}" "${login_req[@]}"
+  expect 403 "sign-in from a foreign Origin refused" \
+    -H 'X-OpenLLM-CSRF: 1' -H 'Origin: https://evil.example' "${login_req[@]}"
   grep -q 'oel_session' "$jar" && pass "HttpOnly session cookie set" || fail "no session cookie"
   command curl -fsS -b "$jar" "$FRONTEND_URL/api/v1/auth/me" | grep -q '"role":"viewer"' \
     && pass "session cookie identifies the viewer" || fail "/auth/me with the session cookie"
-  [[ "$(code_of -b "$jar" -X POST "$FRONTEND_URL/api/v1/projects" -H 'Content-Type: application/json' \
-      -H 'X-OpenLLM-CSRF: 1' -d '{"name":"smoke-viewer-denied"}')" == "403" ]] \
-    && pass "viewer may not create projects (403)" || fail "viewer was allowed to change data"
-  [[ "$(code_of -b "$jar" -X POST "$FRONTEND_URL/api/v1/auth/logout" -H 'X-OpenLLM-CSRF: 1')" == "204" ]] \
-    && [[ "$(code_of -b "$jar" "$FRONTEND_URL/api/v1/auth/me")" == "401" ]] \
-    && pass "sign-out ends the session" || fail "sign-out"
+  expect 403 "viewer may not create projects" -b "$jar" -X POST "$FRONTEND_URL/api/v1/projects" \
+    -H 'Content-Type: application/json' -H 'X-OpenLLM-CSRF: 1' -d '{"name":"smoke-viewer-denied"}'
+  expect 204 "sign-out" -b "$jar" -X POST "$FRONTEND_URL/api/v1/auth/logout" -H 'X-OpenLLM-CSRF: 1'
+  expect 401 "the session ends at sign-out" -b "$jar" "$FRONTEND_URL/api/v1/auth/me"
   rm -f "$jar"
-  curl -sS -o /dev/null -X DELETE "$API_URL/api/v1/users/$viewer_id"
+  curl -sS -o /dev/null -X DELETE "$API_URL/api/v1/users/$viewer_id" && SMOKE_VIEWER=""
 
   admin_name="$(env_value ADMIN_USERNAME)"
   users="$(curl -fsS "$API_URL/api/v1/users")"
@@ -373,8 +393,13 @@ if [[ -n "$mock_running" || "${SMOKE_MOCK:-0}" == "1" ]]; then
     tool_run="$(curl -sS -X POST "$API_URL/api/v1/runs" -H 'Content-Type: application/json' -d "$tool_run_body")"
     run_id="$(printf '%s' "$tool_run" | sed -n 's/^{"id":"\([0-9a-f-]*\)".*/\1/p')"
     [[ -n "$run_id" ]] || { echo "    response: $tool_run"; fail "create integration-mode run"; }
-    printf '%s' "$tool_run" | grep -q '"tool_registry":{"sha256":"[0-9a-f]\{64\}"' \
-      && pass "integration-mode run records the tool registry hash" || fail "tool registry in the run snapshot"
+    # PostgreSQL (jsonb) reorders object keys, so extract the tool_registry object first and
+    # look for its hash and the calculator version in any order.
+    registry="$(printf '%s' "$tool_run" | grep -Eo '"tool_registry":\{("[a-z0-9_]+":("[^"]*"|\{[^}]*\}),?)+\}')"
+    printf '%s' "$registry" | grep -Eq '"sha256":"[0-9a-f]{64}"' \
+      && printf '%s' "$registry" | grep -q '"calculator":"1"' \
+      && pass "integration-mode run records the tool registry hash" \
+      || { echo "    tool_registry: ${registry:-missing}"; fail "tool registry in the run snapshot"; }
     deadline=$((SECONDS + TIMEOUT_SECONDS))
     status="$(run_status || true)"
     until [[ "$status" =~ ^(completed|completed_with_errors|cancelled|failed)$ ]]; do
