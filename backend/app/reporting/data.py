@@ -226,7 +226,7 @@ def _warnings(run: BenchmarkRun, data: dict[str, Any]) -> list[dict[str, str]]:
             f"The run executed in {run.pass_count} passes (resumed or retried). Throughput "
             "needs one contiguous measurement window and may be unavailable.",
         )
-    if snap.get("sampling") not in (None, "deterministic"):
+    if snap.get("sampling") not in (None, "greedy"):
         warn(
             "info",
             "Sampling was not greedy (temperature above 0 or unset), so answers vary between "

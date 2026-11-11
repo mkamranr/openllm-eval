@@ -24,6 +24,10 @@ or a hosted API). It runs reproducible load tests and quality evaluations agains
 datasets and stores every request, so each number can be traced back to the requests that
 produced it. Everything runs on your own infrastructure: no telemetry, no CDN, no model downloads.
 
+<p align="center">
+  <img src="docs/assets/dashboard.jpg" alt="OpenLLM-Eval dashboard showing model endpoints, recent evaluations, and system health" width="900">
+</p>
+
 ## Features
 
 | Area | What you get |
