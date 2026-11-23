@@ -5,82 +5,110 @@
   </picture>
 </p>
 
+<h3 align="center">Self-hosted benchmarking and evaluation for LLM inference endpoints</h3>
+
 <p align="center">
-  <b>Self-hosted benchmarking and evaluation for LLM inference endpoints.</b><br>
   Measure latency and throughput <i>and</i> whether the answers are right, on your own hardware.
 </p>
 
 <p align="center">
-  <img alt="License" src="https://img.shields.io/badge/license-Apache--2.0-5b4cf0">
-  <img alt="Python" src="https://img.shields.io/badge/python-3.12-7c4dff">
-  <img alt="React" src="https://img.shields.io/badge/react-18-9b4dff">
-  <img alt="Status" src="https://img.shields.io/badge/status-milestone%204-16a34a">
+  <a href="https://github.com/mkamranr/openllm-eval/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/mkamranr/openllm-eval/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-5b4cf0"></a>
+  <img alt="Python 3.12" src="https://img.shields.io/badge/python-3.12-7c4dff?logo=python&logoColor=white">
+  <img alt="React 18" src="https://img.shields.io/badge/react-18-9b4dff?logo=react&logoColor=white">
+  <img alt="Docker Compose" src="https://img.shields.io/badge/deploy-docker%20compose-2496ed?logo=docker&logoColor=white">
 </p>
 
----
-
-OpenLLM-Eval connects to any OpenAI-compatible endpoint (vLLM, llama.cpp, Ollama, TGI, LM Studio,
-or a hosted API). It runs reproducible load tests and quality evaluations against versioned
-datasets and stores every request, so each number can be traced back to the requests that
-produced it. Everything runs on your own infrastructure: no telemetry, no CDN, no model downloads.
+<p align="center">
+  <a href="#quick-start">Quick start</a> ·
+  <a href="#features">Features</a> ·
+  <a href="#command-line">CLI</a> ·
+  <a href="#architecture">Architecture</a> ·
+  <a href="#documentation">Docs</a> ·
+  <a href="CHANGELOG.md">Changelog</a>
+</p>
 
 <p align="center">
   <img src="docs/assets/dashboard.jpg" alt="OpenLLM-Eval dashboard showing model endpoints, recent evaluations, and system health" width="900">
 </p>
 
+---
+
+## Overview
+
+OpenLLM-Eval connects to any **OpenAI-compatible endpoint** (vLLM, llama.cpp, Ollama, TGI,
+LM Studio, or a hosted API) and runs reproducible load tests and quality evaluations against
+versioned datasets.
+
+- **Traceable** — every request is stored, so each number links back to the requests that produced it.
+- **Reproducible** — every run keeps an immutable, secret-free snapshot of its configuration.
+- **Honest** — missing measurements are reported as *unavailable* with a reason, never as `0`.
+- **Private** — runs entirely on your infrastructure: no telemetry, no CDN, no model downloads.
+
 ## Features
+
+### Evaluation
+
+| Suite | What it measures |
+|---|---|
+| **Performance** | TTFT, latency percentiles (p50–p99), inter-token latency, tokens/s, throughput, and error rates. Smoke, sequential, fixed-concurrency, ramp, and sustained load profiles; warm-up requests are excluded and retries tracked. |
+| **Answer quality** | Exact, normalized, contains-reference, and token-F1 matching; refusal heuristic for safety cases; optional embedding similarity. |
+| **Structured output** | JSON validity, JSON Schema (Draft 2020-12) conformance with violation paths, and expected-field match. |
+| **RAG & hallucination** | Faithfulness, citation precision/recall, context relevance, precision/recall, and abstention on unanswerable questions. Each claim is classified as supported, unsupported, contradicted, or unverifiable, with evidence and source. Lexical by default; LLM judge optional. |
+| **Tool calling** | Tool selection scored separately from argument correctness; call precision/recall; invented-tool and malformed-argument rates. Tool results are **simulated** from dataset fixtures by default, or executed in an opt-in **sandboxed integration mode**. |
+
+### Platform
 
 | Area | What you get |
 |---|---|
-| **Endpoints** | OpenAI-compatible adapter (streaming and non-streaming), connection tests, model discovery, and secret references so API keys never reach the database. The outbound network policy guards against SSRF. |
-| **Datasets** | JSONL/CSV import with line-numbered validation, immutable versions with SHA-256 content hashes, 8 case types (chat, instruction, Q&A, structured output, tool call, RAG, long context, safety), and bundled sample sets. |
-| **Performance** | Smoke, sequential, fixed-concurrency, ramp, and sustained load profiles. TTFT, latency percentiles (p50 to p99), inter-token latency, tokens/s, throughput, and error rates. Warm-up requests are excluded and retries are tracked. |
-| **Answer quality** | Exact, normalized, contains-reference, and token-F1 matching; a refusal heuristic for safety cases; optional embedding similarity. |
-| **Structured output** | JSON validity, JSON Schema (Draft 2020-12) conformance with violation paths, and expected-field match. |
-| **RAG and hallucination** | Faithfulness, citation precision and recall, context relevance, precision and recall, and abstention on unanswerable questions. Every claim is classified as supported, unsupported, contradicted, or unverifiable, with its evidence and source. Lexical by default; an LLM judge is optional. |
-| **Tool calling** | Tool selection measured separately from argument correctness; call precision and recall; invented-tool and malformed-argument rates; **simulated** tool results from dataset fixtures, so final answers can be checked without executing anything; and an opt-in **sandboxed integration mode** that executes administrator-declared tools in an isolated container. |
-| **Runs** | A background worker with a database-backed queue and leases, live progress over SSE, cancel and retry-failed, and an immutable, secret-free configuration snapshot for every run. |
-| **Reports and comparison** | An offline HTML report (charts, every metric, failures, configuration, methodology, reproduction steps), JSON, CSV, and Markdown exports, and side-by-side run comparison that flags every configuration difference, labels comparability, and lists per-case regressions. One-click re-run. |
-| **Profiles** | Reusable evaluation settings, available from the UI, the API, and the CLI. |
-| **Access control** | Sign-in with local accounts or Active Directory (LDAP/LDAPS, optional Windows single sign-on via Kerberos), viewer / editor / admin roles from AD group mappings, API tokens for the CLI, sign-in lockout, and an audit log. |
-| **Interfaces** | A web UI (dashboard, New Evaluation wizard, run explorer, reports, comparison), a REST API with OpenAPI, and the `openllm-eval` CLI with YAML run configs. |
-
-Missing measurements are always reported as unavailable, with a reason, and never as `0`.
+| **Endpoints** | Streaming and non-streaming adapter, connection tests, model discovery, and secret references so API keys never reach the database. An outbound network policy guards against SSRF. |
+| **Datasets** | JSONL/CSV import with line-numbered validation, immutable versions with SHA-256 hashes, 8 case types (chat, instruction, Q&A, structured output, tool call, RAG, long context, safety), and bundled samples. |
+| **Runs** | Background worker with a database-backed queue and leases, live progress over SSE, cancel, and retry-failed. |
+| **Reports & comparison** | Offline HTML report (charts, metrics, failures, configuration, methodology, reproduction steps); JSON, CSV, and Markdown exports; side-by-side comparison that flags configuration differences, labels comparability, and lists per-case regressions. One-click re-run. |
+| **Profiles** | Reusable evaluation settings, shared across the UI, API, and CLI. |
+| **Access control** | Local accounts or Active Directory (LDAP/LDAPS, optional Windows SSO via Kerberos), viewer / editor / admin roles from AD group mappings, API tokens, sign-in lockout, and an audit log. |
+| **Interfaces** | Web UI (dashboard, New Evaluation wizard, run explorer, reports, comparison), REST API with OpenAPI, and the `openllm-eval` CLI with YAML run configs. |
 
 ## Quick start
 
-Requirements: Docker with Compose v2.
+> **Requirements:** Docker with Compose v2.
 
 ```bash
-cp .env.example .env              # set POSTGRES_PASSWORD (and BIND_ADDRESS=0.0.0.0 for remote access)
-bash scripts/deploy.sh            # builds, migrates, starts, and runs the smoke test
+cp .env.example .env      # set POSTGRES_PASSWORD (and BIND_ADDRESS=0.0.0.0 for remote access)
+bash scripts/deploy.sh    # builds, migrates, starts, and runs the smoke test
 ```
 
-The first deploy prints the `admin` password; you choose a new one at the first sign-in.
+The first deploy prints the `admin` password; you choose a new one at first sign-in.
 
-| | URL |
+| Service | URL |
 |---|---|
 | Web UI | http://localhost:3000 |
 | API readiness | http://localhost:8000/api/v1/health/ready |
 | OpenAPI schema | http://localhost:8000/api/openapi.json |
 
-**Try it without a GPU** using the bundled mock model server:
+### Try it without a GPU
+
+A bundled mock model server lets you explore the whole workflow without real hardware:
 
 ```bash
 echo "ENDPOINT_ALLOWED_HOSTS=mock-llm" >> .env
 bash scripts/deploy.sh --mock
-# UI → Models / Endpoints → Add endpoint: base URL http://mock-llm:9000/v1, model mock-model → Test
 ```
 
-Then open **New Evaluation**, pick the endpoint, select *Performance* and *Answer quality*, add
-the *Sample: general Q&A* dataset, and start the run.
+1. Go to **Models / Endpoints → Add endpoint**, use base URL `http://mock-llm:9000/v1` and model `mock-model`, then click **Test**.
+2. Open **New Evaluation** and pick the endpoint.
+3. Select the *Performance* and *Answer quality* suites.
+4. Add the *Sample: general Q&A* dataset and start the run.
 
-**Upgrading:** unpack a new release into any folder, copy `.env` (and `secrets.env`, and
-`tools/tools.yaml` if you use the tool sandbox) across, and
-run `bash scripts/deploy.sh`. The script stops the previous install's containers, keeps the data
-volumes, and applies the database migrations.
+### Upgrading
 
-## Run from the CLI
+Unpack the new release into any folder, copy over `.env` (plus `secrets.env` and
+`tools/tools.yaml` if you use them), and run `bash scripts/deploy.sh`. The script stops the
+previous install's containers, keeps the data volumes, and applies database migrations.
+
+## Command line
+
+Describe a run in YAML:
 
 ```yaml
 # bench.yaml
@@ -100,58 +128,73 @@ load:
   warmup_requests: 5
 ```
 
+Then run it:
+
 ```bash
-openllm-eval auth login -u alice      # once: stores an API token
+openllm-eval auth login -u alice                     # once: stores an API token
 openllm-eval run create --config bench.yaml --wait
 openllm-eval run results <run-id>
 ```
 
+See the [CLI reference](docs/reference/cli.md) for every command.
+
 ## Architecture
 
-```
+```text
 browser ──► frontend (nginx) ──/api──► api (FastAPI) ──► PostgreSQL
                                           │          └─► Redis (wake-up signal, heartbeats)
-                                       worker ──► model endpoints (through adapters + network policy)
+                                       worker ──► model endpoints (adapters + network policy)
 ```
 
-The backend is a modular monolith in Python 3.12 (FastAPI, async SQLAlchemy 2, Alembic). It is
-deployed as two processes, an API and a worker. The UI is React 18 + TypeScript built with Vite
-and served by nginx. See the [architecture overview](docs/architecture/overview.md).
+| Layer | Stack |
+|---|---|
+| Backend | Python 3.12 modular monolith — FastAPI, async SQLAlchemy 2, Alembic — deployed as an API and a worker process |
+| Frontend | React 18 + TypeScript, built with Vite and served by nginx |
+| Storage | PostgreSQL for all data; Redis for wake-up signals and heartbeats |
+
+Read the [architecture overview](docs/architecture/overview.md) for details.
 
 ## Documentation
 
-| Guide | |
+| Guide | Description |
 |---|---|
-| [User guide](docs/user-guide/getting-started.md) | Endpoints, datasets, runs, quality evaluation, and profiles, step by step |
+| [Getting started](docs/user-guide/getting-started.md) | Endpoints, datasets, runs, quality evaluation, and profiles, step by step |
 | [Dataset format](docs/user-guide/datasets.md) | Case types, fields, and JSONL/CSV examples |
-| [Authentication](docs/user-guide/authentication.md) | Users, roles, Active Directory, Windows single sign-on |
+| [Authentication](docs/user-guide/authentication.md) | Users, roles, Active Directory, and Windows single sign-on |
 | [Tool sandbox](docs/user-guide/tool-sandbox.md) | Executing tool calls in integration mode |
 | [Configuration](docs/reference/configuration.md) | Every `.env` setting |
 | [CLI reference](docs/reference/cli.md) | `openllm-eval` commands and the run config format |
 | [API reference](docs/reference/api.md) | REST endpoints, errors, and streaming events |
 | [Developer setup](docs/developer-guide/setup.md) | Local development, deployment, migrations, and testing |
-| [Architecture](docs/architecture/overview.md) · [Data model](docs/architecture/data-model.md) | How it fits together |
+| [Architecture](docs/architecture/overview.md) · [Data model](docs/architecture/data-model.md) | How the pieces fit together |
 
 ## Roadmap
 
-- [x] **M0** Foundation: Compose stack, health checks, migrations, CI
-- [x] **M1** Model endpoints, adapters, secret references, network policy
-- [x] **M2** Versioned datasets and validation
-- [x] **M3** Run engine and performance metrics
-- [x] **M4** Deterministic evaluators, tool calling, evaluation profiles
-- [x] **M5** RAG and evidence evaluation, optional LLM judge, hallucination indicators
-- [x] **M6** Run comparison, reports, and exports
-- [x] **M7** Quantization and context-window studies
-- [x] **M8** Authentication: local and Active Directory accounts, Windows single sign-on, roles, audit log
-- [x] **M9** Sandboxed tool execution (integration mode)
+| Milestone | Scope | Status |
+|---|---|:---:|
+| M0 | Foundation: Compose stack, health checks, migrations, CI | ✅ |
+| M1 | Model endpoints, adapters, secret references, network policy | ✅ |
+| M2 | Versioned datasets and validation | ✅ |
+| M3 | Run engine and performance metrics | ✅ |
+| M4 | Deterministic evaluators, tool calling, evaluation profiles | ✅ |
+| M5 | RAG and evidence evaluation, optional LLM judge, hallucination indicators | ✅ |
+| M6 | Run comparison, reports, and exports | ✅ |
+| M7 | Quantization and context-window studies | ✅ |
+| M8 | Authentication: local and AD accounts, Windows SSO, roles, audit log | ✅ |
+| M9 | Sandboxed tool execution (integration mode) | ✅ |
 
-See the [CHANGELOG](CHANGELOG.md) for details.
+See the [CHANGELOG](CHANGELOG.md) for release details.
 
-## Contributing and security
+## Contributing
 
-Contributions are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md). To report a vulnerability,
-follow [SECURITY.md](SECURITY.md) instead of opening an issue.
+Contributions are welcome — please read [CONTRIBUTING.md](CONTRIBUTING.md) and the
+[Code of Conduct](CODE_OF_CONDUCT.md) first.
+
+## Security
+
+Please **do not** open public issues for vulnerabilities. Follow the process in
+[SECURITY.md](SECURITY.md).
 
 ## License
 
-[Apache-2.0](LICENSE)
+Released under the [Apache License 2.0](LICENSE).
